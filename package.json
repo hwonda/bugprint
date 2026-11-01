@@ -1,0 +1,55 @@
+{
+  "name": "bugprint",
+  "version": "0.1.0",
+  "description": "MCP server that turns recorded user sessions (rrweb) into failing, reproducible end-to-end tests.",
+  "type": "module",
+  "bin": {
+    "bugprint": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:repro": "playwright test",
+    "demo:serve": "node demo/serve.mjs",
+    "demo:record": "node demo/record-fixture.mjs",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/cli.js",
+    "demo": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout.spec.ts --base-url http://localhost:4173 && playwright test",
+    "demo:fixed": "DEMO_FIXED=1 playwright test",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "rrweb",
+    "e2e",
+    "bug-reproduction",
+    "testing"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@rrweb/rrweb-plugin-console-record": "^2.2.0",
+    "@types/node": "^26.6.6",
+    "rrweb": "^2.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

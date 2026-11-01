@@ -1,0 +1,7 @@
+body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+header { display: flex; justify-content: space-between; align-items: center; }
+.products { list-style: none; padding: 0; display: grid; gap: 1rem; }
+.products li { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; }
+form { display: grid; gap: .5rem; }
+.row { display: flex; gap: .5rem; }
+#result { margin-top: 1rem; font-weight: 600; }

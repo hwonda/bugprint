@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bugprint Demo Shop</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/vendor/rrweb.umd.min.cjs"></script>
+  <script src="/vendor/rrweb-plugin-console-record.umd.min.cjs"></script>
+  <script src="/recorder.js"></script>
+</head>
+<body>
+  <header><h1>Demo Shop</h1><span id="cart-count" aria-live="polite">Cart: 0</span></header>
+  <main>
+    <ul class="products">
+      <li>
+        <h2>Mechanical Keyboard</h2>
+        <p class="price">$120</p>
+        <button data-sku="kb" class="add">Add to cart</button>
+      </li>
+      <li>
+        <h2>Wireless Mouse</h2>
+        <p class="price">$45</p>
+        <button data-sku="mouse" class="add">Add to cart</button>
+      </li>
+    </ul>
+    <a href="/checkout.html">Go to checkout</a>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
