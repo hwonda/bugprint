@@ -39,6 +39,12 @@ export function describeStep(s: Step, redact = true): string {
       return `uncheck ${s.target.locator.description}`;
     case 'select':
       return `select ${JSON.stringify(s.value)} in ${s.target.locator.description}`;
+    case 'press':
+      return `press ${s.key}${s.target ? ` in ${s.target.locator.description}` : ''}`;
+    case 'back':
+      return `go back to ${pathOf(s.url)}`;
+    case 'forward':
+      return `go forward to ${pathOf(s.url)}`;
   }
 }
 

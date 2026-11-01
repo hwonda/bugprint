@@ -25,7 +25,7 @@ describe('MCP server (real recording)', () => {
   it('exposes the tools and the reproduce_bug prompt', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['extract_flow', 'generate_test', 'list_sessions', 'load_session', 'summarize_session']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['extract_flow', 'generate_test', 'list_sessions', 'load_session', 'run_and_verify', 'summarize_session']);
     const { prompts } = await client.listPrompts();
     expect(prompts.map((p) => p.name)).toEqual(['reproduce_bug']);
   });
@@ -33,11 +33,13 @@ describe('MCP server (real recording)', () => {
   it('load → summarize → generate on a real rrweb session', async () => {
     const { call } = await connect();
     const loaded = JSON.parse(await call('load_session', { path: fixture }));
-    expect(loaded.pages).toEqual(['/', '/checkout.html']);
+    expect(loaded.pages).toEqual(['/', '/?q=mouse', '/checkout.html']);
+    expect(loaded.recorded).toEqual({ console: true, network: true, interaction: true });
     expect(loaded.errors[0].message).toMatch(/reading 'rate'/);
 
     const summary = await call('summarize_session', { sessionId: loaded.sessionId });
-    expect(summary).toContain('click button "Add to cart" in listitem "Wireless Mouse"');
+    expect(summary).toContain('click button "Add to cart" in listitem "Mechanical Keyboard"');
+    expect(summary).toContain('press Enter in field labelled "Search products"');
     expect(summary).toContain('type "save20" into field labelled "Coupon code"');
 
     const dir = await mkdtemp(path.join(os.tmpdir(), 'bugprint-'));
@@ -46,6 +48,8 @@ describe('MCP server (real recording)', () => {
     const code = await readFile(out, 'utf8');
     expect(code).toContain("await page.getByTestId('place-order').click();");
     expect(code).toContain("getByLabel('Email').fill('user@example.com'); // redacted");
+    expect(code).toContain('"url":"/api/coupons/save20"');
+    expect(code).toContain('await page.clock.install(');
     await expect(call('generate_test', { sessionId: loaded.sessionId, outputPath: out })).rejects.toThrow(/already exists/);
   });
 

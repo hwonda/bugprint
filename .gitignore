@@ -4,3 +4,4 @@ test-results
 playwright-report
 .bugprint
 tests/repro/
+test/.tmp/

@@ -1,0 +1,109 @@
+/**
+ * bugprint recorder plugin for rrweb (browser code, no dependencies).
+ *
+ * rrweb records the DOM but not two things a reproduction usually needs:
+ *  - key presses that *do* something (Enter to submit, Escape to close, shortcuts)
+ *  - client-side route changes (history.pushState / back / forward)
+ *
+ *   import { record } from 'rrweb';
+ *   import { getRecordBugprintPlugin } from 'bugprint/recorder';
+ *   record({ emit, plugins: [getRecordBugprintPlugin()] });
+ */
+
+export const PLUGIN_NAME = 'bugprint/interaction@1';
+
+export type InteractionPayload =
+  | { type: 'key'; key: string; id: number | null }
+  | { type: 'nav'; href: string; via: 'push' | 'replace' | 'back' | 'forward' | 'pop' };
+
+export interface BugprintRecordOptions {
+  /** Keys recorded on their own. Printable characters are never recorded (rrweb already has the value). */
+  keys?: string[];
+  /** Record Ctrl/Meta/Alt + key shortcuts. Default true. */
+  shortcuts?: boolean;
+}
+
+const DEFAULT_KEYS = ['Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', 'Delete'];
+
+interface NodeMirror {
+  getId(n: Node): number;
+}
+
+type Emit = (payload: InteractionPayload) => void;
+
+export function getRecordBugprintPlugin(options: BugprintRecordOptions = {}) {
+  const keys = new Set(options.keys ?? DEFAULT_KEYS);
+  const shortcuts = options.shortcuts ?? true;
+  let mirror: NodeMirror | null = null;
+
+  return {
+    name: PLUGIN_NAME,
+    options,
+    getMirror(m: { nodeMirror: NodeMirror }) {
+      mirror = m.nodeMirror;
+    },
+    observer(cb: (...args: unknown[]) => void, win: Window) {
+      const emit: Emit = (p) => cb(p);
+      const teardowns: (() => void)[] = [];
+
+      // ---- keys -----------------------------------------------------------
+      const onKey = (e: KeyboardEvent) => {
+        if (e.isComposing || e.key === 'Process') return; // IME composition (Korean, Japanese, ...)
+        const mods = [e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Meta'].filter(Boolean) as string[];
+        const isShortcut = shortcuts && (e.ctrlKey || e.metaKey || e.altKey) && !['Control', 'Meta', 'Alt', 'Shift'].includes(e.key);
+        if (!keys.has(e.key) && !isShortcut) return;
+        const key = [...mods, e.key].join('+'); // test-runner syntax, e.g. "Shift+Enter", "Control+k"
+        const target = e.target && typeof (e.target as Node).nodeType === 'number' ? (e.target as Node) : null;
+        const id = target && mirror ? mirror.getId(target) : null;
+        emit({ type: 'key', key, id: id !== null && id >= 0 ? id : null });
+      };
+      win.addEventListener('keydown', onKey, true);
+      teardowns.push(() => win.removeEventListener('keydown', onKey, true));
+
+      // ---- client-side navigation -----------------------------------------
+      const history = win.history;
+      const entries = [win.location.href];
+      let index = 0;
+      const wrap = (method: 'pushState' | 'replaceState') => {
+        const original = history[method];
+        history[method] = function (this: History, ...args: Parameters<History['pushState']>) {
+          const before = win.location.href;
+          const result = original.apply(this, args);
+          const href = win.location.href;
+          if (method === 'pushState') {
+            entries.splice(index + 1, entries.length, href);
+            index = entries.length - 1;
+          } else entries[index] = href;
+          if (href !== before) emit({ type: 'nav', href, via: method === 'pushState' ? 'push' : 'replace' });
+          return result;
+        } as History['pushState'];
+        teardowns.push(() => {
+          history[method] = original;
+        });
+      };
+      wrap('pushState');
+      wrap('replaceState');
+
+      const onPop = () => {
+        const href = win.location.href;
+        let via: 'back' | 'forward' | 'pop' = 'pop';
+        if (entries[index - 1] === href) {
+          via = 'back';
+          index--;
+        } else if (entries[index + 1] === href) {
+          via = 'forward';
+          index++;
+        } else {
+          // e.g. an in-page #anchor link: behaves like a push
+          entries.splice(index + 1, entries.length, href);
+          index = entries.length - 1;
+        }
+        emit({ type: 'nav', href, via });
+      };
+      win.addEventListener('popstate', onPop);
+      teardowns.push(() => win.removeEventListener('popstate', onPop));
+
+      return () => teardowns.forEach((t) => t());
+    },
+  };
+}

@@ -67,3 +67,7 @@ export class Rec {
     return this.push(3, { source: 0, adds: [], removes: [], texts: [], attributes: [], ...data }, 20);
   }
 }
+
+export function plugin(r: Rec, name: string, payload: unknown, dt = 20) {
+  return r.push(6, { plugin: name, payload }, dt);
+}

@@ -7,6 +7,7 @@ import { generateTest } from './codegen/test.js';
 import type { Flow, Step } from './flow/extract.js';
 import { describeStep, fmtTime, pathOf, summarizeFlow } from './flow/summarize.js';
 import { SessionStore } from './store.js';
+import { verifyTest } from './verify/run.js';
 import { VERSION } from './version.js';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -19,7 +20,7 @@ const windowShape = {
 
 function compactStep(s: Step) {
   const base = { id: s.id, t: s.t, at: fmtTime(s.t), kind: s.kind, does: describeStep(s) };
-  if ('target' in s) {
+  if ('target' in s && s.target) {
     return {
       ...base,
       locator: s.target.code,
@@ -37,6 +38,8 @@ function overview(flow: Flow) {
     duration: fmtTime(flow.durationMs),
     pages: flow.pages.map(pathOf),
     steps: flow.steps.length,
+    apiCalls: flow.network.length,
+    recorded: flow.capabilities,
     errors: errors.map((e) => ({ at: fmtTime(e.t), afterStep: e.afterStepId, kind: e.kind, message: e.message, source: e.trace[0] })),
   };
 }
@@ -47,7 +50,8 @@ export function createServer(store = new SessionStore()): McpServer {
     {
       instructions:
         'bugprint turns a recorded user session (rrweb events) into a failing end-to-end test that reproduces the bug. ' +
-        'Typical flow: load_session → summarize_session (cheap overview) → generate_test (optionally narrowed with fromMs/toMs or includeSteps) → run the test and fix the bug until it passes. ' +
+        'Typical flow: load_session → summarize_session (cheap overview) → generate_test with outputPath → run_and_verify (expect verdict "reproduced") → fix the code → run_and_verify again (expect "passed"). ' +
+        'If run_and_verify says "failed-differently", read failedStep and adjust (trim steps with includeSteps/excludeSteps, or set baseUrl) before touching app code. ' +
         'Use extract_flow only when you need structured step data.',
     },
   );
@@ -99,6 +103,7 @@ export function createServer(store = new SessionStore()): McpServer {
         ...overview(flow),
         steps: flow.steps.map(compactStep),
         signals: flow.signals.map((s) => ({ ...s, at: fmtTime(s.t), url: pathOf(s.url) })),
+        network: flow.network.map((c) => ({ at: fmtTime(c.t), method: c.method, url: pathOf(c.url), status: c.status, hasBody: c.responseBody !== null })),
         warnings: flow.warnings,
       });
     },
@@ -121,6 +126,8 @@ export function createServer(store = new SessionStore()): McpServer {
         expectVisibleText: z.string().optional().describe('Also assert this text becomes visible (the expected outcome when the bug is fixed).'),
         assertNoErrors: z.boolean().optional().describe('Fail on page errors / console.error. Defaults to true when the session captured an error.'),
         redactPii: z.boolean().optional().describe('Replace e-mails, phone and card numbers with fakes. Default true.'),
+        mockNetwork: z.boolean().optional().describe('Serve the recorded API responses instead of the live backend. Default true when the recording has them.'),
+        freezeTime: z.boolean().optional().describe('Start the browser clock at the recording time. Default true.'),
         outputPath: z.string().optional().describe('Write the test here (e.g. tests/repro/checkout.spec.ts).'),
         overwrite: z.boolean().optional().describe('Allow replacing an existing file at outputPath.'),
       },
@@ -140,10 +147,32 @@ export function createServer(store = new SessionStore()): McpServer {
       const notes: string[] = [];
       if (written) notes.push(`Written to ${written}. Run it with: npx playwright test ${path.relative(process.cwd(), written)}`);
       if (result.secrets.length) notes.push(`Set ${result.secrets.join(', ')} (values were masked in the recording).`);
+      if (result.mockedResponses) notes.push(`${result.mockedResponses} recorded API response(s) are served by the test.`);
       if (!result.recordedErrors.length) notes.push('No error was recorded in the selected steps: add an assertion describing the bug (or pass expectVisibleText).');
-      notes.push(...flow.warnings.filter((w) => !w.startsWith('No error')));
+      notes.push(...result.notes, ...flow.warnings.filter((w) => !w.startsWith('No error')));
+      if (written) notes.push('Next: run_and_verify with this testPath.');
       return text(`${notes.map((n) => `// ${n}`).join('\n')}\n\n${result.code}`);
     },
+  );
+
+  server.registerTool(
+    'run_and_verify',
+    {
+      title: 'Run a reproduction test and check it',
+      description:
+        "Run a generated test with the project's own test runner config and compare the outcome with the recording. " +
+        'Verdicts: "reproduced" (fails with the recorded error — ready to fix), "failed-differently" (fails elsewhere; see failedStep), ' +
+        '"passed" (bug fixed, or not reproduced if you have not fixed anything yet), "failed" (no recorded error to compare), "error" (runner problem).',
+      inputSchema: {
+        testPath: z.string().describe('Path to the generated test file.'),
+        baseUrl: z.string().url().optional().describe('Origin to run against (exported as BUGPRINT_BASE_URL).'),
+        cwd: z.string().optional().describe('Project root containing the test runner config. Defaults to the server working directory.'),
+        timeoutMs: z.number().int().positive().optional().describe('Kill the run after this long. Default 180000.'),
+        allProjects: z.boolean().optional().describe('Run every configured browser project instead of the first one.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ testPath, baseUrl, cwd, timeoutMs, allProjects }) => json(await verifyTest(testPath, { baseUrl, cwd, timeoutMs, allProjects })),
   );
 
   server.registerTool(
@@ -178,8 +207,8 @@ export function createServer(store = new SessionStore()): McpServer {
               '1. load_session with that path, then summarize_session.',
               '2. Identify the error and the steps that lead to it; drop steps that are clearly unrelated.',
               `3. generate_test${baseUrl ? ` with baseUrl ${baseUrl}` : ''} and write it under tests/repro/.`,
-              '4. Run the test and confirm it fails with the recorded error.',
-              '5. Find the root cause in the source, fix it, and re-run until the test passes. Keep the test as a regression test.',
+              '4. run_and_verify the test. Continue only when the verdict is "reproduced"; if it is "failed-differently" or "passed", adjust the test first.',
+              '5. Find the root cause in the source and fix it. run_and_verify again until the verdict is "passed". Keep the test as a regression test.',
             ].join('\n'),
           },
         },

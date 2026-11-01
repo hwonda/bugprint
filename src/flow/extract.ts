@@ -26,11 +26,24 @@ export type Step =
   | (StepBase & { kind: 'click' | 'dblclick' | 'rightclick'; target: Target })
   | (StepBase & { kind: 'fill'; target: Target; value: string; masked: boolean })
   | (StepBase & { kind: 'check' | 'uncheck'; target: Target })
-  | (StepBase & { kind: 'select'; target: Target; value: string });
+  | (StepBase & { kind: 'select'; target: Target; value: string })
+  | (StepBase & { kind: 'press'; key: string; target: Target | null })
+  | (StepBase & { kind: 'back' | 'forward' });
+
+/** An API call captured by the rrweb network plugin (`rrweb/network@1`). */
+export interface NetworkCall {
+  t: number;
+  method: string;
+  url: string;
+  status: number;
+  initiatorType: string;
+  contentType: string | null;
+  responseBody: string | null;
+}
 
 export interface Signal {
   t: number;
-  kind: 'uncaught-error' | 'console-error' | 'console-warn' | 'custom';
+  kind: 'uncaught-error' | 'console-error' | 'console-warn' | 'network-error' | 'custom';
   message: string;
   trace: string[];
   /** The step that was performed right before this signal, if any. */
@@ -43,8 +56,14 @@ export interface Flow {
   startUrl: string;
   pages: string[];
   durationMs: number;
+  /** Epoch ms when the recording started (used to freeze the clock on replay). */
+  recordedAt: number;
   steps: Step[];
   signals: Signal[];
+  /** fetch/XHR calls with their recorded responses, in order. */
+  network: NetworkCall[];
+  /** Which optional recorder plugins were present. */
+  capabilities: { console: boolean; network: boolean; interaction: boolean };
   warnings: string[];
 }
 
@@ -55,6 +74,9 @@ export interface ExtractOptions {
 }
 
 const NAV_WINDOW_MS = 4000;
+/** A keyboard-activated control (Enter on a button / implicit form submit) also fires a click. */
+const SYNTHETIC_CLICK_MS = 150;
+const API_INITIATORS = new Set(['fetch', 'xmlhttprequest']);
 
 type DraftStep = Step extends infer S ? (S extends Step ? Omit<S, 'id'> : never) : never;
 
@@ -64,6 +86,8 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
   const signals: (Omit<Signal, 'afterStepId'> & { stepIndex: number })[] = [];
   const warnings = new Set<string>();
   const pages: string[] = [];
+  const network: NetworkCall[] = [];
+  const capabilities = { console: false, network: false, interaction: false };
 
   let dom: VirtualDom | null = null;
   let href = '';
@@ -141,6 +165,8 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
           return;
         }
         if (d.type === MouseInteraction.Click) {
+          const p = last();
+          if (p?.kind === 'press' && /(^|\+)(Enter| )$/.test(p.key) && t - p.t <= SYNTHETIC_CLICK_MS) return;
           const node = interactiveTarget(dom!, raw);
           steps.push({ kind: 'click', t, url: href, target: target(node) });
           lastActionAt = t;
@@ -217,13 +243,73 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
 
   function handlePlugin(ev: RrwebEvent, t: number) {
     const plugin = String(ev.data?.plugin ?? '');
-    if (!plugin.includes('console')) return;
-    const p = ev.data.payload ?? {};
-    const level = String(p.level ?? '');
-    if (level !== 'error' && level !== 'warn' && level !== 'assert') return;
-    const message = (Array.isArray(p.payload) ? p.payload : [p.payload]).map(unquote).join(' ');
-    const kind: Signal['kind'] = /^Uncaught\b/.test(message) ? 'uncaught-error' : level === 'warn' ? 'console-warn' : 'console-error';
-    signals.push({ t, kind, message, trace: Array.isArray(p.trace) ? p.trace.map(String) : [], url: href, stepIndex: steps.length - 1 });
+    const p = ev.data?.payload ?? {};
+    if (plugin.startsWith('rrweb/console')) {
+      capabilities.console = true;
+      const level = String(p.level ?? '');
+      if (level !== 'error' && level !== 'warn' && level !== 'assert') return;
+      const message = (Array.isArray(p.payload) ? p.payload : [p.payload]).map(unquote).join(' ');
+      const kind: Signal['kind'] = /^Uncaught\b/.test(message) ? 'uncaught-error' : level === 'warn' ? 'console-warn' : 'console-error';
+      signals.push({ t, kind, message, trace: Array.isArray(p.trace) ? p.trace.map(String) : [], url: href, stepIndex: steps.length - 1 });
+    } else if (plugin.startsWith('rrweb/network')) {
+      capabilities.network = true;
+      for (const r of Array.isArray(p.requests) ? p.requests : []) handleRequest(r, t);
+    } else if (plugin.startsWith('bugprint/interaction')) {
+      capabilities.interaction = true;
+      handleInteraction(p, t);
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function handleRequest(r: any, t: number) {
+    const initiatorType = String(r.initiatorType ?? '');
+    if (!API_INITIATORS.has(initiatorType)) return;
+    const url = String(r.name ?? r.url ?? '');
+    if (!url) return;
+    const status = Number(r.status ?? 0);
+    const headers: Record<string, string> = r.responseHeaders ?? {};
+    const contentType = Object.entries(headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1] ?? null;
+    const body = r.responseBody;
+    const call: NetworkCall = {
+      t,
+      method: String(r.method ?? 'GET').toUpperCase(),
+      url: absolute(url),
+      status,
+      initiatorType,
+      contentType,
+      responseBody: body === undefined || body === null ? null : typeof body === 'string' ? body : stringify(body),
+    };
+    network.push(call);
+    if (status === 0 || status >= 500) {
+      signals.push({ t, kind: 'network-error', message: `${call.method} ${pathOfUrl(call.url)} → ${status || 'failed'}`, trace: [], url: href, stepIndex: steps.length - 1 });
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function handleInteraction(p: any, t: number) {
+    if (p.type === 'key') {
+      const node = typeof p.id === 'number' ? dom?.get(p.id) : undefined;
+      const focusable = node && node.tagName !== 'body' && node.tagName !== 'html' ? node : undefined;
+      steps.push({ kind: 'press', t, url: href, key: String(p.key), target: focusable ? target(focusable) : null });
+      lastActionAt = t;
+      return;
+    }
+    if (p.type === 'nav') {
+      const next = String(p.href ?? '');
+      if (!next || next === href) return;
+      if (!pages.includes(next)) pages.push(next);
+      if (p.via === 'back' || p.via === 'forward') steps.push({ kind: p.via, t, url: next });
+      else steps.push({ kind: 'expectUrl', t, url: next });
+      href = next;
+    }
+  }
+
+  function absolute(u: string): string {
+    try {
+      return new URL(u, href || undefined).href;
+    } catch {
+      return u;
+    }
   }
 
   // ---- windowing + ids ------------------------------------------------------
@@ -249,7 +335,7 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
       return { ...s, afterStepId: id };
     });
 
-  if (!finalSignals.some((s) => s.kind !== 'console-warn')) {
+  if (!finalSignals.some((s) => s.kind !== 'console-warn' && s.kind !== 'network-error')) {
     warnings.add('No error was captured in this recording. The generated test will replay the steps but needs an assertion that describes the bug.');
   }
 
@@ -258,10 +344,22 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     startUrl: finalSteps[0]?.url ?? href,
     pages,
     durationMs: session.durationMs,
+    recordedAt: session.startedAt,
     steps: finalSteps,
     signals: finalSignals,
+    network,
+    capabilities,
     warnings: [...warnings],
   };
+}
+
+function pathOfUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    return x.pathname + x.search;
+  } catch {
+    return u;
+  }
 }
 
 function isMasked(node: VNode, value: string): boolean {
