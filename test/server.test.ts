@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -25,7 +25,7 @@ describe('MCP server (real recording)', () => {
   it('exposes the tools and the reproduce_bug prompt', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['extract_flow', 'generate_test', 'list_sessions', 'load_session', 'run_and_verify', 'summarize_session']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['extract_flow', 'generate_test', 'list_sessions', 'load_session', 'minimize_repro', 'run_and_verify', 'summarize_session']);
     const { prompts } = await client.listPrompts();
     expect(prompts.map((p) => p.name)).toEqual(['reproduce_bug']);
   });
@@ -57,4 +57,25 @@ describe('MCP server (real recording)', () => {
     const { call } = await connect();
     await expect(call('summarize_session', { sessionId: 'nope' })).rejects.toThrow(/load_session/);
   });
+
+  it('minimize_repro streams progress and writes the minimal test', async () => {
+    const { client, call } = await connect();
+    const loaded = JSON.parse(await call('load_session', { path: fixture }));
+    const progress: string[] = [];
+    const dir = await mkdtemp(path.join(path.resolve(__dirname, '..'), 'test', '.tmp-mcp-'));
+    const out = path.join(dir, 'min.spec.ts');
+    const res = (await client.callTool(
+      { name: 'minimize_repro', arguments: { sessionId: loaded.sessionId, baseUrl: 'http://localhost:4173', outputPath: out, cwd: path.resolve(__dirname, '..') } },
+      undefined,
+      { onprogress: (p) => progress.push(String(p.message)), timeout: 240_000 },
+    )) as { content: { text: string }[] };
+    const body = JSON.parse(res.content[0]!.text);
+    expect(body.verdict).toBe('minimized');
+    expect(body.minimal.steps).toBe(4);
+    expect(body.written).toBe(out);
+    expect(progress[0]).toMatch(/round 1: baseline/);
+    expect(progress.length).toBe(body.rounds);
+    expect(await readFile(out, 'utf8')).toContain("getByLabel('Coupon code').fill('save20')");
+    await rm(dir, { recursive: true, force: true });
+  }, 240_000);
 });

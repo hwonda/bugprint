@@ -8,6 +8,7 @@ import type { Flow, Step } from './flow/extract.js';
 import { describeStep, fmtTime, pathOf, summarizeFlow } from './flow/summarize.js';
 import { SessionStore } from './store.js';
 import { verifyTest } from './verify/run.js';
+import { minimizeRepro } from './minimize/minimize.js';
 import { VERSION } from './version.js';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -52,6 +53,7 @@ export function createServer(store = new SessionStore()): McpServer {
         'bugprint turns a recorded user session (rrweb events) into a failing end-to-end test that reproduces the bug. ' +
         'Typical flow: load_session → summarize_session (cheap overview) → generate_test with outputPath → run_and_verify (expect verdict "reproduced") → fix the code → run_and_verify again (expect "passed"). ' +
         'If run_and_verify says "failed-differently", read failedStep and adjust (trim steps with includeSteps/excludeSteps, or set baseUrl) before touching app code. ' +
+        'Once reproduced, minimize_repro finds the shortest test that still fails the same way, which usually points straight at the cause. ' +
         'Use extract_flow only when you need structured step data.',
     },
   );
@@ -128,6 +130,8 @@ export function createServer(store = new SessionStore()): McpServer {
         redactPii: z.boolean().optional().describe('Replace e-mails, phone and card numbers with fakes. Default true.'),
         mockNetwork: z.boolean().optional().describe('Serve the recorded API responses instead of the live backend. Default true when the recording has them.'),
         freezeTime: z.boolean().optional().describe('Start the browser clock at the recording time. Default true.'),
+        startFrom: z.string().optional().describe('Start at this navigation step id (opens its URL directly and skips earlier steps).'),
+        restoreStorage: z.boolean().optional().describe('Restore localStorage/cookies captured when the recording started. Default true.'),
         outputPath: z.string().optional().describe('Write the test here (e.g. tests/repro/checkout.spec.ts).'),
         overwrite: z.boolean().optional().describe('Allow replacing an existing file at outputPath.'),
       },
@@ -135,13 +139,12 @@ export function createServer(store = new SessionStore()): McpServer {
     },
     async (args) => {
       const flow = store.flow(args.sessionId, { fromMs: args.fromMs, toMs: args.toMs });
-      const result = generateTest(flow, args);
+      const abs = args.outputPath ? path.resolve(process.cwd(), args.outputPath) : undefined;
+      const result = generateTest(flow, { ...args, fixturesFile: abs ? fixturesName(abs) : undefined });
       let written: string | undefined;
-      if (args.outputPath) {
-        const abs = path.resolve(process.cwd(), args.outputPath);
+      if (abs) {
         if (!args.overwrite && (await exists(abs))) throw new Error(`${abs} already exists. Pass overwrite: true to replace it.`);
-        await mkdir(path.dirname(abs), { recursive: true });
-        await writeFile(abs, result.code, 'utf8');
+        await writeOutputs(abs, result);
         written = abs;
       }
       const notes: string[] = [];
@@ -173,6 +176,58 @@ export function createServer(store = new SessionStore()): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({ testPath, baseUrl, cwd, timeoutMs, allProjects }) => json(await verifyTest(testPath, { baseUrl, cwd, timeoutMs, allProjects })),
+  );
+
+  server.registerTool(
+    'minimize_repro',
+    {
+      title: 'Shrink a reproduction to its essential steps',
+      description:
+        'Find the shortest test that still fails with the recorded error: first tries opening later pages directly, then removes steps by delta debugging. ' +
+        'Candidates of each round run in parallel in a single test-runner invocation. Takes a while (typically 30–90 s); sends progress notifications. ' +
+        'The full test must already be "reproduced".',
+      inputSchema: {
+        sessionId: z.string(),
+        ...windowShape,
+        baseUrl: z.string().url().optional(),
+        outputPath: z.string().optional().describe('Write the minimal test here.'),
+        overwrite: z.boolean().optional(),
+        cwd: z.string().optional().describe('Project root containing the test runner config.'),
+        workers: z.number().int().positive().optional().describe('Parallel workers per round. Default 4.'),
+        maxRounds: z.number().int().positive().optional().describe('Upper bound on test-runner invocations. Default 12.'),
+        mockNetwork: z.boolean().optional(),
+        freezeTime: z.boolean().optional(),
+        restoreStorage: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args, extra) => {
+      const flow = store.flow(args.sessionId, { fromMs: args.fromMs, toMs: args.toMs });
+      const token = extra._meta?.progressToken;
+      const result = await minimizeRepro(flow, {
+        ...args,
+        onProgress: (message, round) => {
+          if (token === undefined) return;
+          void extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: round, total: args.maxRounds ?? 12, message } });
+        },
+      });
+      let written: string | undefined;
+      if (result.code && args.outputPath) {
+        const abs = path.resolve(args.cwd ?? process.cwd(), args.outputPath);
+        if (!args.overwrite && (await exists(abs))) throw new Error(`${abs} already exists. Pass overwrite: true to replace it.`);
+        // Regenerate with a fixtures file name so large responses can live next to the test.
+        const final = generateTest(flow, {
+          ...args,
+          startFrom: result.minimal?.startFrom ?? undefined,
+          includeSteps: result.minimal?.includeSteps,
+          fixturesFile: fixturesName(abs),
+        });
+        await writeOutputs(abs, final);
+        written = abs;
+      }
+      const { code, baseline, ...rest } = result;
+      return json({ ...rest, baseline: { verdict: baseline.verdict, summary: baseline.summary }, written, code: written ? undefined : code });
+    },
   );
 
   server.registerTool(
@@ -208,7 +263,8 @@ export function createServer(store = new SessionStore()): McpServer {
               '2. Identify the error and the steps that lead to it; drop steps that are clearly unrelated.',
               `3. generate_test${baseUrl ? ` with baseUrl ${baseUrl}` : ''} and write it under tests/repro/.`,
               '4. run_and_verify the test. Continue only when the verdict is "reproduced"; if it is "failed-differently" or "passed", adjust the test first.',
-              '5. Find the root cause in the source and fix it. run_and_verify again until the verdict is "passed". Keep the test as a regression test.',
+              '5. minimize_repro to get the shortest failing test; the remaining steps point at the cause.',
+              '6. Find the root cause in the source and fix it. run_and_verify again until the verdict is "passed". Keep the (minimal) test as a regression test.',
             ].join('\n'),
           },
         },
@@ -217,6 +273,16 @@ export function createServer(store = new SessionStore()): McpServer {
   );
 
   return server;
+}
+
+function fixturesName(testFile: string): string {
+  return `${path.basename(testFile).replace(/\.(spec|test)\.[cm]?[jt]s$/, '').replace(/\.[cm]?[jt]s$/, '')}.responses.json`;
+}
+
+async function writeOutputs(abs: string, result: { code: string; files: { name: string; content: string }[] }) {
+  await mkdir(path.dirname(abs), { recursive: true });
+  await writeFile(abs, result.code, 'utf8');
+  for (const f of result.files) await writeFile(path.join(path.dirname(abs), f.name), f.content, 'utf8');
 }
 
 async function exists(p: string): Promise<boolean> {

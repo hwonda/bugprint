@@ -13,6 +13,7 @@
 export const PLUGIN_NAME = 'bugprint/interaction@1';
 
 export type InteractionPayload =
+  | { type: 'storage'; origin: string; localStorage: Record<string, string>; cookies: Record<string, string>; masked: string[] }
   | { type: 'key'; key: string; id: number | null }
   | { type: 'nav'; href: string; via: 'push' | 'replace' | 'back' | 'forward' | 'pop' };
 
@@ -21,7 +22,15 @@ export interface BugprintRecordOptions {
   keys?: string[];
   /** Record Ctrl/Meta/Alt + key shortcuts. Default true. */
   shortcuts?: boolean;
+  /** Snapshot localStorage and readable cookies when recording starts. Default true. */
+  storage?: boolean;
+  /** Storage keys never captured (their names are reported, their values never leave the browser). */
+  sensitiveKeys?: RegExp;
+  /** Skip values longer than this many characters. Default 20000. */
+  maxValueLength?: number;
 }
+
+const SENSITIVE = /token|auth|session|secret|passw|jwt|credential|api[-_]?key|private|csrf|xsrf|sid$|^__bugprint/i;
 
 const DEFAULT_KEYS = ['Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', 'Delete'];
 
@@ -45,6 +54,37 @@ export function getRecordBugprintPlugin(options: BugprintRecordOptions = {}) {
     observer(cb: (...args: unknown[]) => void, win: Window) {
       const emit: Emit = (p) => cb(p);
       const teardowns: (() => void)[] = [];
+
+      // ---- initial storage ------------------------------------------------
+      if (options.storage ?? true) {
+        const sensitive = options.sensitiveKeys ?? SENSITIVE;
+        const max = options.maxValueLength ?? 20_000;
+        const masked: string[] = [];
+        const keep = (k: string, v: string) => {
+          if (sensitive.test(k)) masked.push(k);
+          else if (v.length <= max) return true;
+          return false;
+        };
+        const localStorage: Record<string, string> = {};
+        try {
+          for (let i = 0; i < win.localStorage.length; i++) {
+            const k = win.localStorage.key(i);
+            if (k === null) continue;
+            const v = win.localStorage.getItem(k) ?? '';
+            if (keep(k, v)) localStorage[k] = v;
+          }
+        } catch {
+          /* storage blocked (privacy mode, sandboxed iframe) */
+        }
+        const cookies: Record<string, string> = {};
+        for (const part of win.document.cookie ? win.document.cookie.split('; ') : []) {
+          const eq = part.indexOf('=');
+          const k = decodeURIComponent(eq === -1 ? part : part.slice(0, eq));
+          const v = eq === -1 ? '' : part.slice(eq + 1);
+          if (keep(k, v)) cookies[k] = v;
+        }
+        emit({ type: 'storage', origin: win.location.origin, localStorage, cookies, masked });
+      }
 
       // ---- keys -----------------------------------------------------------
       const onKey = (e: KeyboardEvent) => {

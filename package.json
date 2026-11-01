@@ -1,6 +1,6 @@
 {
   "name": "bugprint",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that turns recorded user sessions (rrweb) into failing, reproducible end-to-end tests.",
   "type": "module",
   "bin": {
@@ -26,7 +26,8 @@
     "demo": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout.spec.ts --base-url http://localhost:4173 && node dist/cli.js verify tests/repro/checkout.spec.ts",
     "demo:fixed": "DEMO_FIXED=1 node dist/cli.js verify tests/repro/checkout.spec.ts",
     "prepublishOnly": "npm run typecheck && npm test && npm run build",
-    "demo:live": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout-live.spec.ts --base-url http://localhost:4173 --no-mock-network && node dist/cli.js verify tests/repro/checkout-live.spec.ts"
+    "demo:live": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout-live.spec.ts --base-url http://localhost:4173 --no-mock-network && node dist/cli.js verify tests/repro/checkout-live.spec.ts",
+    "demo:minimize": "npm run build && node dist/cli.js minimize fixtures/checkout-bug.json --base-url http://localhost:4173 -o tests/repro/checkout.min.spec.ts"
   },
   "keywords": [
     "mcp",

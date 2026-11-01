@@ -10,12 +10,33 @@ export interface Session {
   durationMs: number;
 }
 
+const isEvent = (e: unknown): e is RrwebEvent =>
+  Boolean(e) && typeof e === 'object' && typeof (e as RrwebEvent).type === 'number' && typeof (e as RrwebEvent).timestamp === 'number';
+
 /**
- * Accepts the common shapes a recording is exported in:
- *  - a bare array of rrweb events
- *  - `{ events: [...] }`
- *  - newline-delimited JSON (one event per line)
+ * Finds the rrweb events inside whatever a recording was exported as:
+ *  - a bare array of events, or an array of segments (arrays of events)
+ *  - an object holding them under any key, at any depth up to 4
+ *    (`{ events }`, `{ snapshots }`, `{ data: { snapshots } }`, `{ recording: { segments } }`, ...)
+ *  - newline-delimited JSON (one event, or one segment, per line)
+ * Events from all segments are merged and sorted by time.
  */
+function collectEvents(value: unknown, depth = 0): RrwebEvent[] {
+  if (depth > 4 || value === null || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    const direct = value.filter(isEvent);
+    if (direct.length) return direct;
+    return value.flatMap((v) => (Array.isArray(v) || (v && typeof v === 'object') ? collectEvents(v, depth + 1) : []));
+  }
+  // Prefer the property holding the most events (ignores small metadata arrays).
+  let best: RrwebEvent[] = [];
+  for (const v of Object.values(value)) {
+    const found = collectEvents(v, depth + 1);
+    if (found.length > best.length) best = found;
+  }
+  return best;
+}
+
 export function parseEvents(raw: unknown): RrwebEvent[] {
   let value = raw;
   if (typeof value === 'string') {
@@ -35,19 +56,21 @@ export function parseEvents(raw: unknown): RrwebEvent[] {
         });
     }
   }
-  if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray((value as { events?: unknown }).events)) {
-    value = (value as { events: unknown[] }).events;
-  }
-  if (!Array.isArray(value)) throw new Error('Recording must be an array of rrweb events or an object with an "events" array.');
-
-  const events = value.filter(
-    (e): e is RrwebEvent => e && typeof e === 'object' && typeof e.type === 'number' && typeof e.timestamp === 'number',
-  );
-  if (!events.length) throw new Error('Recording contains no rrweb events.');
+  if (!value || typeof value !== 'object') throw new Error('Recording must be JSON containing rrweb events.');
+  const events = collectEvents(value);
+  if (!events.length) throw new Error('No rrweb events found in the recording (expected objects with numeric "type" and "timestamp").');
   if (!events.some((e) => e.type === EventType.FullSnapshot)) {
     throw new Error('Recording has no full DOM snapshot (event type 2); it cannot be mapped to elements.');
   }
-  return [...events].sort((a, b) => a.timestamp - b.timestamp);
+  // De-duplicate events repeated across overlapping segments, then order by time.
+  const seen = new Set<string>();
+  const unique = events.filter((e) => {
+    const key = `${e.timestamp}:${e.type}:${JSON.stringify(e.data)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return unique.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 export function createSession(events: RrwebEvent[], source: string): Session {

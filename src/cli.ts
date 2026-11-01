@@ -9,6 +9,7 @@ import { summarizeFlow } from './flow/summarize.js';
 import { createServer } from './server.js';
 import { loadSessionFile } from './session/load.js';
 import { verifyTest } from './verify/run.js';
+import { minimizeRepro } from './minimize/minimize.js';
 import { VERSION } from './version.js';
 
 const HELP = `bugprint ${VERSION} — turn recorded user sessions into failing reproduction tests
@@ -18,6 +19,7 @@ Usage:
   bugprint summarize <recording>    print the step timeline and captured errors
   bugprint generate <recording>     print (or write) a reproduction test
   bugprint verify <test-file>       run a generated test and say whether it reproduces the bug
+  bugprint minimize <recording>     find the shortest test that still reproduces the bug
 
 Options for generate:
   -o, --out <file>        write the test to a file
@@ -29,6 +31,9 @@ Options for generate:
       --no-redact         keep typed values as recorded
       --no-mock-network   hit the live backend instead of serving recorded responses
       --no-freeze-time    do not set the browser clock to the recording time
+
+Options for minimize: same as generate, plus
+      --workers <n>       parallel workers per round (default 4)
 
 Options for verify:
       --base-url <url>    origin to run against (BUGPRINT_BASE_URL)
@@ -60,6 +65,7 @@ async function main() {
       'no-mock-network': { type: 'boolean' },
       'no-freeze-time': { type: 'boolean' },
       json: { type: 'boolean' },
+      workers: { type: 'string' },
     },
   });
   const file = positionals[0];
@@ -82,8 +88,39 @@ async function main() {
   const list = (v?: string) => v?.split(',').map((s) => s.trim()).filter(Boolean);
 
   if (cmd === 'summarize') return void process.stdout.write(`${summarizeFlow(flow)}\n`);
+  if (cmd === 'minimize') {
+    const r = await minimizeRepro(flow, {
+      baseUrl: values['base-url'],
+      redactPii: !values['no-redact'],
+      mockNetwork: values['no-mock-network'] ? false : undefined,
+      freezeTime: !values['no-freeze-time'],
+      workers: num(values.workers),
+      onProgress: (m) => process.stderr.write(`… ${m}\n`),
+    });
+    if (values.json) return void process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
+    process.stdout.write(`${r.verdict === 'minimized' ? '✂️ ' : ''}${r.verdict} — ${r.summary}\n`);
+    process.stdout.write(`   ${r.rounds} round(s), ${r.testsRun} test run(s), ${(r.durationMs / 1000).toFixed(1)}s\n`);
+    if (r.minimal) {
+      process.stdout.write('\nKept:\n');
+      for (const d of r.minimal.description) process.stdout.write(`  ${d}\n`);
+      if (r.removed.length) {
+        process.stdout.write('\nRemoved:\n');
+        for (const d of r.removed) process.stdout.write(`  ${d}\n`);
+      }
+    }
+    if (r.code && values.out) {
+      const out = path.resolve(values.out);
+      await mkdir(path.dirname(out), { recursive: true });
+      await writeFile(out, r.code, 'utf8');
+      process.stderr.write(`wrote ${path.relative(process.cwd(), out)}\n`);
+    }
+    if (r.verdict === 'error' || r.verdict === 'not-reproduced') process.exitCode = 1;
+    return;
+  }
   if (cmd === 'generate') {
+    const outPath = values.out ? path.resolve(values.out) : undefined;
     const result = generateTest(flow, {
+      fixturesFile: outPath ? `${path.basename(outPath).replace(/\.(spec|test)\.[cm]?[jt]s$/, '')}.responses.json` : undefined,
       baseUrl: values['base-url'],
       includeSteps: list(values.include),
       excludeSteps: list(values.exclude),
@@ -97,6 +134,7 @@ async function main() {
       const out = path.resolve(values.out);
       await mkdir(path.dirname(out), { recursive: true });
       await writeFile(out, result.code, 'utf8');
+      for (const f of result.files) await writeFile(path.join(path.dirname(out), f.name), f.content, 'utf8');
       process.stderr.write(`wrote ${path.relative(process.cwd(), out)} (${result.stepCount} steps)\n`);
     } else process.stdout.write(result.code);
     return;

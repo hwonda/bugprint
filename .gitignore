@@ -5,3 +5,4 @@ playwright-report
 .bugprint
 tests/repro/
 test/.tmp/
+test/.tmp-mcp-*/

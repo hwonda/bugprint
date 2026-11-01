@@ -22,6 +22,19 @@ export interface GenerateOptions {
   mockNetwork?: boolean;
   /** Start the browser clock at the time the session was recorded. Default: true. */
   freezeTime?: boolean;
+  /**
+   * Start the test at this navigation step (goto / expectUrl / back / forward / reload),
+   * opening its URL directly and skipping everything before it.
+   */
+  startFrom?: string;
+  /** Restore localStorage and cookies captured at the start of the recording. Default: true when captured. */
+  restoreStorage?: boolean;
+  /**
+   * File name (next to the test) for recorded responses. When set and the responses are larger
+   * than `inlineLimit` bytes, they are written there instead of inline. See GeneratedTest.files.
+   */
+  fixturesFile?: string;
+  inlineLimit?: number;
 }
 
 export interface GeneratedTest {
@@ -33,6 +46,10 @@ export interface GeneratedTest {
   mockedResponses: number;
   /** Things the caller (agent or human) should know about this test. */
   notes: string[];
+  /** Extra files to write next to the test (e.g. external response fixtures). */
+  files: { name: string; content: string }[];
+  /** Ids of the steps the test contains, in order. */
+  stepIds: string[];
 }
 
 /** Machine-readable header so `verify` can compare a run with the recording. */
@@ -42,14 +59,42 @@ export interface TestMeta {
   errors: string[];
 }
 export const META_PREFIX = '// @bugprint ';
+/** Annotation through which a generated test reports the page errors it actually saw. */
+export const ERRORS_ANNOTATION = 'bugprint:errors';
 
-const MAX_BODY = 256 * 1024;
+const MAX_INLINE_BODY = 256 * 1024;
+const MAX_FILE_BODY = 5 * 1024 * 1024;
+const NAV_KINDS = new Set<Step['kind']>(['goto', 'expectUrl', 'reload', 'back', 'forward']);
 
-export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedTest {
+/** Applies startFrom / includeSteps / excludeSteps and guarantees the test starts by opening a page. */
+export function selectSteps(flow: Flow, opts: Pick<GenerateOptions, 'startFrom' | 'includeSteps' | 'excludeSteps'>): Step[] {
+  let all = flow.steps;
+  let start: Step | null = null;
+  if (opts.startFrom) {
+    const idx = all.findIndex((s) => s.id === opts.startFrom);
+    if (idx === -1) throw new Error(`Unknown step "${opts.startFrom}".`);
+    const s0 = all[idx]!;
+    if (!NAV_KINDS.has(s0.kind)) throw new Error(`startFrom must be a navigation step (goto/expectUrl/reload/back/forward); ${s0.id} is a ${s0.kind}.`);
+    start = { id: s0.id, t: s0.t, url: s0.url, kind: 'goto' };
+    all = all.slice(idx + 1);
+  }
   const include = opts.includeSteps ? new Set(opts.includeSteps) : null;
   const exclude = new Set(opts.excludeSteps ?? []);
-  const steps = flow.steps.filter((s) => (!include || include.has(s.id)) && !exclude.has(s.id));
+  let steps = all.filter((s) => (!include || include.has(s.id)) && !exclude.has(s.id));
+  if (start) steps = [start, ...steps];
+  const first = steps[0];
+  if (first && first.kind !== 'goto') {
+    steps = NAV_KINDS.has(first.kind)
+      ? [{ id: first.id, t: first.t, url: first.url, kind: 'goto' }, ...steps.slice(1)]
+      : [{ id: 'start', t: first.t, url: first.url, kind: 'goto' }, ...steps];
+  }
+  return steps;
+}
+
+export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedTest {
+  const steps = selectSteps(flow, opts);
   if (!steps.length) throw new Error('No steps left to generate a test from.');
+  const files: GeneratedTest['files'] = [];
 
   const notes: string[] = [];
   const errors = flow.signals.filter((s) => s.kind === 'uncaught-error' || s.kind === 'console-error' || s.kind === 'custom');
@@ -74,7 +119,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
         noBody++;
         continue;
       }
-      if (c.responseBody.length > MAX_BODY) {
+      if (c.responseBody.length > (opts.fixturesFile ? MAX_FILE_BODY : MAX_INLINE_BODY)) {
         tooBig++;
         continue;
       }
@@ -87,7 +132,39 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
       });
     }
     if (noBody) notes.push(`${noBody} recorded API call(s) have no response body (enable recordBody in the network plugin); they go to the live backend.`);
-    if (tooBig) notes.push(`${tooBig} response(s) larger than ${MAX_BODY / 1024} KB were not inlined; they go to the live backend.`);
+    if (tooBig) notes.push(`${tooBig} response(s) were too large to include; they go to the live backend.`);
+  }
+  const responsesJson = JSON.stringify(responses);
+  const external = Boolean(opts.fixturesFile) && responses.length > 0 && responsesJson.length > (opts.inlineLimit ?? 64 * 1024);
+  if (external) files.push({ name: opts.fixturesFile!, content: `${JSON.stringify(responses, null, 1)}\n` });
+  else if (responsesJson.length > (opts.inlineLimit ?? 64 * 1024)) notes.push('Recorded responses are large; pass an outputPath so they can be stored in a separate fixtures file.');
+
+  // ---- storage ---------------------------------------------------------------
+  const storage = flow.initialStorage;
+  const restore = (opts.restoreStorage ?? true) && storage && (Object.keys(storage.localStorage).length || Object.keys(storage.cookies).length);
+  if (storage?.masked.length) {
+    notes.push(`The recorder left out sensitive storage entries (${storage.masked.join(', ')}). If the bug needs a logged-in user, provide storageState yourself.`);
+  }
+  if (restore && storage && originOf(storage.origin) !== recordedOrigin) {
+    notes.push(`Initial storage was captured on ${storage.origin}, not on the start page origin; it was not restored.`);
+  }
+  const storageLines: string[] = [];
+  if (restore && storage && originOf(storage.origin) === recordedOrigin) {
+    const val = (v: string) => (redact ? redactBody(v, 'application/json') : v);
+    const ls = Object.entries(storage.localStorage).map(([name, value]) => `{ name: ${str(name)}, value: ${str(val(value))} }`);
+    const cookies = Object.entries(storage.cookies).map(
+      ([name, value]) => `{ name: ${str(name)}, value: ${str(val(value))}, domain: new URL(BASE_URL).hostname, path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' as const }`,
+    );
+    storageLines.push(
+      '// Browser storage when the recording started. Sensitive keys were never recorded.',
+      'test.use({',
+      '  storageState: {',
+      `    cookies: [${cookies.length ? `\n      ${cookies.join(',\n      ')},\n    ` : ''}],`,
+      `    origins: [{ origin: new URL(BASE_URL).origin, localStorage: [${ls.length ? `\n      ${ls.join(',\n      ')},\n    ` : ''}] }],`,
+      '  },',
+      '});',
+      '',
+    );
   }
   if (!flow.capabilities.network) {
     notes.push('The recording has no network data, so the test runs against your live backend. Bugs that depend on API data may not reproduce. Record with the rrweb network plugin (recordBody: true) to capture responses.');
@@ -100,6 +177,11 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   const secrets: string[] = [];
   const body: string[] = [];
   if (freezeTime) body.push(`  await page.clock.install({ time: new Date(${str(new Date(flow.recordedAt).toISOString())}) }); // when the session was recorded`);
+  if (external) {
+    body.push(
+      `  const RECORDED_RESPONSES: RecordedResponse[] = JSON.parse(readFileSync(path.join(path.dirname(test.info().file), ${str(opts.fixturesFile!)}), 'utf8'));`,
+    );
+  }
   if (responses.length) body.push('  await serveRecordedResponses(page, RECORDED_RESPONSES);');
   if (body.length) body.push('');
 
@@ -127,6 +209,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
         if (e.trace[0]) tail.push(`  //     at ${truncate(e.trace[0], 100)}`);
       }
     }
+    tail.push(`  test.info().annotations.push({ type: ${str(ERRORS_ANNOTATION)}, description: JSON.stringify(errors) });`);
     tail.push("  expect(errors, 'the page should not throw while replaying the recorded steps').toEqual([]);");
   }
   if (!tail.length) {
@@ -141,12 +224,14 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     `// Pages: ${flow.pages.map(pathOf).join(' → ')}`,
     '// The test is expected to FAIL while the bug exists and pass once it is fixed.',
     `${META_PREFIX}${JSON.stringify(meta)}`,
+    ...(external ? ["import { readFileSync } from 'node:fs';", "import path from 'node:path';"] : []),
     `import { test, expect${responses.length ? ', type Page' : ''} } from '@playwright/test';`,
     '',
     `const BASE_URL = process.env.BUGPRINT_BASE_URL ?? ${str(baseUrl)};`,
     '',
+    ...storageLines,
   ];
-  if (responses.length) {
+  if (responses.length && !external) {
     out.push(
       '// API responses captured in the recording. They are served instead of the live backend,',
       '// so the app sees exactly the data the user saw.',
@@ -162,7 +247,8 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
       '  const errors: string[] = [];',
       "  page.on('pageerror', (err) => errors.push(err.message));",
       "  page.on('console', (msg) => {",
-      "    if (msg.type() === 'error') errors.push(msg.text());",
+      "    // The browser logs every failed request as an error; network failures are not page errors.",
+      "    if (msg.type() === 'error' && !msg.text().startsWith('Failed to load resource')) errors.push(msg.text());",
       '  });',
       '',
     );
@@ -170,7 +256,17 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   out.push(...body, '', ...tail, '});', '');
   if (responses.length) out.push(...SERVE_HELPER);
 
-  return { code: out.join('\n'), testName, stepCount: steps.length, secrets, recordedErrors: relevant, mockedResponses: responses.length, notes };
+  return {
+    code: out.join('\n'),
+    testName,
+    stepCount: steps.length,
+    stepIds: steps.map((s) => s.id),
+    secrets,
+    recordedErrors: relevant,
+    mockedResponses: responses.length,
+    notes,
+    files,
+  };
 
   function networkKey(c: NetworkCall): string {
     return originOf(c.url) === recordedOrigin ? pathOf(c.url) : c.url;

@@ -41,6 +41,14 @@ export interface NetworkCall {
   responseBody: string | null;
 }
 
+export interface InitialStorage {
+  origin: string;
+  localStorage: Record<string, string>;
+  cookies: Record<string, string>;
+  /** Keys the recorder refused to capture because they look sensitive. */
+  masked: string[];
+}
+
 export interface Signal {
   t: number;
   kind: 'uncaught-error' | 'console-error' | 'console-warn' | 'network-error' | 'custom';
@@ -62,6 +70,8 @@ export interface Flow {
   signals: Signal[];
   /** fetch/XHR calls with their recorded responses, in order. */
   network: NetworkCall[];
+  /** localStorage and cookies when the recording started (bugprint recorder plugin). */
+  initialStorage: InitialStorage | null;
   /** Which optional recorder plugins were present. */
   capabilities: { console: boolean; network: boolean; interaction: boolean };
   warnings: string[];
@@ -88,6 +98,7 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
   const pages: string[] = [];
   const network: NetworkCall[] = [];
   const capabilities = { console: false, network: false, interaction: false };
+  let initialStorage: InitialStorage | null = null;
 
   let dom: VirtualDom | null = null;
   let href = '';
@@ -287,6 +298,18 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function handleInteraction(p: any, t: number) {
+    if (p.type === 'storage') {
+      // Only the first snapshot describes the state the session *started* with.
+      if (!initialStorage) {
+        initialStorage = {
+          origin: String(p.origin ?? ''),
+          localStorage: stringRecord(p.localStorage),
+          cookies: stringRecord(p.cookies),
+          masked: Array.isArray(p.masked) ? p.masked.map(String) : [],
+        };
+      }
+      return;
+    }
     if (p.type === 'key') {
       const node = typeof p.id === 'number' ? dom?.get(p.id) : undefined;
       const focusable = node && node.tagName !== 'body' && node.tagName !== 'html' ? node : undefined;
@@ -348,9 +371,16 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     steps: finalSteps,
     signals: finalSignals,
     network,
+    initialStorage,
     capabilities,
     warnings: [...warnings],
   };
+}
+
+function stringRecord(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (typeof x === 'string') out[k] = x;
+  return out;
 }
 
 function pathOfUrl(u: string): string {
