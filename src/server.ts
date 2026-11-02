@@ -1,8 +1,9 @@
-import { mkdir, writeFile, access } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { redactValue } from './codegen/redact.js';
+import { fixturesName, writeOutputs } from './codegen/output.js';
 import { generateTest } from './codegen/test.js';
 import type { Flow, Step } from './flow/extract.js';
 import { describeStep, fmtTime, pathOf, summarizeFlow } from './flow/summarize.js';
@@ -253,10 +254,13 @@ export function createServer(store = new SessionStore()): McpServer {
         ...args,
         onProgress: (message, round) => {
           if (token === undefined) return;
-          void extra.sendNotification({
-            method: 'notifications/progress',
-            params: { progressToken: token, progress: round, total: args.maxRounds ?? 12, message },
-          });
+          extra
+            .sendNotification({
+              method: 'notifications/progress',
+              params: { progressToken: token, progress: round, total: args.maxRounds ?? 12, message },
+            })
+            // The client may have gone away mid-run; a failed notification must not crash the server.
+            .catch(() => {});
         },
       });
       let written: string | undefined;
@@ -327,19 +331,6 @@ export function createServer(store = new SessionStore()): McpServer {
   );
 
   return server;
-}
-
-function fixturesName(testFile: string): string {
-  return `${path
-    .basename(testFile)
-    .replace(/\.(spec|test)\.[cm]?[jt]s$/, '')
-    .replace(/\.[cm]?[jt]s$/, '')}.responses.json`;
-}
-
-async function writeOutputs(abs: string, result: { code: string; files: { name: string; content: string }[] }) {
-  await mkdir(path.dirname(abs), { recursive: true });
-  await writeFile(abs, result.code, 'utf8');
-  for (const f of result.files) await writeFile(path.join(path.dirname(abs), f.name), f.content, 'utf8');
 }
 
 async function exists(p: string): Promise<boolean> {

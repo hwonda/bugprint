@@ -1,5 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { fixturesName, writeOutputs } from '../codegen/output.js';
 import { generateTest, selectSteps, type GenerateOptions } from '../codegen/test.js';
 import type { Flow, Step } from '../flow/extract.js';
 import { describeStep } from '../flow/summarize.js';
@@ -85,13 +86,15 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
       const files: string[] = [];
       for (const [i, c] of fresh.entries()) {
         const file = path.join(dir, `c${i}.spec.ts`);
-        const { code } = generateTest(flow, {
+        // Same fixtures handling as the final test, so the test that was checked is the test that is written.
+        const result = generateTest(flow, {
           ...genOpts,
           startFrom: c.startFrom ?? undefined,
           includeSteps: c.include,
           testName: `candidate ${i}`,
+          fixturesFile: fixturesName(file),
         });
-        await writeFile(file, code);
+        await writeOutputs(file, result);
         files.push(file);
       }
       const results = await verifyTests(files, { cwd, baseUrl: opts.baseUrl, workers: opts.workers, timeoutMs: opts.timeoutMs });
@@ -217,11 +220,17 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
     opts.onProgress?.(`round ${rounds}: confirm the minimal test ${n} times`, rounds);
     const dir = path.join(work, `r${rounds}`);
     await mkdir(dir);
-    const { code } = generateTest(flow, { ...genOpts, startFrom: c.startFrom ?? undefined, includeSteps: c.include, testName: 'confirm' });
     const files = await Promise.all(
       Array.from({ length: n }, async (_, i) => {
         const file = path.join(dir, `confirm${i}.spec.ts`);
-        await writeFile(file, code);
+        const result = generateTest(flow, {
+          ...genOpts,
+          startFrom: c.startFrom ?? undefined,
+          includeSteps: c.include,
+          testName: 'confirm',
+          fixturesFile: fixturesName(file),
+        });
+        await writeOutputs(file, result);
         return file;
       }),
     );

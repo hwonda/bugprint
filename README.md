@@ -190,6 +190,7 @@ import { getRecordBugprintPlugin } from 'bugprint/recorder';
 
 record({
   emit: (e) => events.push(e),
+  userTriggeredOnInput: true, // tells user typing apart from values set by your framework
   plugins: [
     getRecordConsolePlugin({ level: ['error', 'warn'] }), // errors → the assertion
     getRecordNetworkPlugin({ recordBody: true }), // API responses → replayed in the test
@@ -207,6 +208,11 @@ record({
 `bugprint/recorder` has no dependencies and weighs about 6 KB. When recording starts, it takes a snapshot of localStorage and readable cookies. Sensitive keys (`accessToken`, `sessionId`, `apiKey`, `password`, `csrf`, ...) are reported by name only, and their values never leave the browser. Keys are judged by their words, so `author` is not caught by `auth`. Add your own with `sensitiveKeys`.
 
 The plugin never records ordinary typing, only special keys and Ctrl/Meta/Alt shortcuts. rrweb already records field values and applies its own masking to them.
+
+Two things to get right when setting up recording:
+
+- **Start `record()` in the top window only.** rrweb records same-origin iframes itself. If the script also runs inside an iframe (for example via a tag manager or an init script that is injected into every frame), two recorders chase each other and the page fails with "Maximum call stack size exceeded".
+- **Turn on `userTriggeredOnInput`.** Frameworks set input values in code when they render, and rrweb records those too. bugprint filters them out by tracking which element has focus. The flag makes this exact.
 
 ---
 

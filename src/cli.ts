@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { fixturesName, writeOutputs } from './codegen/output.js';
 import { generateTest } from './codegen/test.js';
 import { extractFlow } from './flow/extract.js';
 import { summarizeFlow } from './flow/summarize.js';
@@ -144,7 +145,7 @@ async function main() {
   if (cmd === 'generate') {
     const outPath = values.out ? path.resolve(values.out) : undefined;
     const result = generateTest(flow, {
-      fixturesFile: outPath ? `${path.basename(outPath).replace(/\.(spec|test)\.[cm]?[jt]s$/, '')}.responses.json` : undefined,
+      fixturesFile: outPath ? fixturesName(outPath) : undefined,
       baseUrl: values['base-url'],
       includeSteps: list(values.include),
       excludeSteps: list(values.exclude),
@@ -158,9 +159,7 @@ async function main() {
     for (const n of result.notes) process.stderr.write(`note: ${n}\n`);
     if (values.out) {
       const out = path.resolve(values.out);
-      await mkdir(path.dirname(out), { recursive: true });
-      await writeFile(out, result.code, 'utf8');
-      for (const f of result.files) await writeFile(path.join(path.dirname(out), f.name), f.content, 'utf8');
+      await writeOutputs(out, result);
       process.stderr.write(`wrote ${path.relative(process.cwd(), out)} (${result.stepCount} steps)\n`);
     } else process.stdout.write(result.code);
     return;

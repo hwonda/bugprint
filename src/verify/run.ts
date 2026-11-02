@@ -130,7 +130,9 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   const reportFile = path.join(tmp, 'report.json');
   // The wrapper must sit next to the user's config: relative paths in it (webServer.cwd,
   // globalSetup, outputDir...) are resolved against the config file's directory.
-  const ext = userConfig ? path.extname(userConfig) : '.mjs';
+  // A TypeScript config needs a TypeScript wrapper; for any JS flavour (.js/.cjs/.mjs) an ES module
+  // wrapper can import it (an ESM wrapper named .cjs or .js in a CommonJS package would not load).
+  const ext = userConfig?.endsWith('.ts') ? '.ts' : '.mjs';
   const wrapperDir = userConfig ? path.dirname(userConfig) : tmp;
   sweepStale(wrapperDir, WRAPPER_PREFIX);
   const wrapper = path.join(wrapperDir, `${WRAPPER_PREFIX}${process.pid}-${Date.now()}.config${ext}`);
@@ -217,7 +219,8 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
     // Compare with the errors the page actually produced. Never with the raw failure message:
     // it contains a code frame, and the generated comments quote the recorded error.
     const observed = observedErrors(tests, failed) ?? [stripCodeFrame(message)];
-    const matched = recordedErrors.find((rec) => observed.some((o) => o.includes(core(rec))));
+    // An empty recorded message (console.error() with no arguments) would match anything.
+    const matched = matchRecordedError(recordedErrors, observed);
     if (matched) {
       return makeResult(
         i,
@@ -317,6 +320,14 @@ export function stepAt(source: string, line: number): VerifyResult['failedStep']
 }
 
 /** "Uncaught TypeError: x is undefined" → "x is undefined" (how page errors are reported on replay). */
+/** The recorded error the observed errors contain, if any. Empty or trivial messages never match. */
+export function matchRecordedError(recorded: string[], observed: string[]): string | undefined {
+  return recorded.find((rec) => {
+    const c = core(rec);
+    return c.length >= 3 && observed.some((o) => o.includes(c));
+  });
+}
+
 function core(message: string): string {
   return message
     .replace(/^Uncaught\s+(\(in promise\)\s+)?/, '')
@@ -332,13 +343,40 @@ function wrapperConfig(
   workers: number,
 ): string {
   const head = userConfig
-    ? `import base from ${JSON.stringify(`./${path.basename(userConfig).replace(/\.(ts|mts)$/, '')}`)};\nconst b = base.default ?? base;\n`
+    ? `import base from ${JSON.stringify(`./${path.basename(userConfig).replace(/\.ts$/, '')}`)};\nconst b = base.default ?? base;\n`
     : 'const b = {};\n';
   return `${head}// Temporary config written by bugprint verify; deleted after the run.
-const projects = Array.isArray(b.projects) && b.projects.length
-  ? (${allProjects} ? b.projects : b.projects.slice(0, 1)).map((p) => ({ ...p, testDir: undefined, testMatch: undefined, testIgnore: undefined }))
-  : undefined;
-export default { ...b, testDir: ${JSON.stringify(testDir)}, testMatch: ${JSON.stringify(testFiles)}, testIgnore: [], retries: 0, workers: ${workers}, fullyParallel: true, reporter: [['json']], projects };
+const ours = { testDir: ${JSON.stringify(testDir)}, testMatch: ${JSON.stringify(testFiles)}, testIgnore: [] };
+const run = { retries: 0, workers: ${workers}, fullyParallel: true, reporter: [['json']] };
+let config;
+if (Array.isArray(b.projects) && b.projects.length) {
+  const all = b.projects;
+  // Projects others depend on (auth "setup", teardown) keep their own files and settings.
+  const depended = new Set(all.flatMap((p) => [...(p.dependencies ?? []), ...(p.teardown ? [p.teardown] : [])]));
+  const leaves = all.filter((p) => !depended.has(p.name));
+  const pool = leaves.length ? leaves : all;
+  const chosen = ${allProjects} ? pool : pool.slice(0, 1);
+  const needed = new Set();
+  const visit = (name) => {
+    if (needed.has(name)) return;
+    needed.add(name);
+    const p = all.find((x) => x.name === name);
+    for (const d of p?.dependencies ?? []) visit(d);
+    if (p?.teardown) visit(p.teardown);
+  };
+  for (const p of chosen) {
+    for (const d of p.dependencies ?? []) visit(d);
+    if (p.teardown) visit(p.teardown);
+  }
+  const projects = all
+    .filter((p) => chosen.includes(p) || needed.has(p.name))
+    .map((p) => (chosen.includes(p) ? { ...p, ...ours } : p));
+  // The root testDir stays the user's, so dependency projects without their own still find their files.
+  config = { ...b, ...run, projects };
+} else {
+  config = { ...b, ...ours, ...run };
+}
+export default config;
 `;
 }
 

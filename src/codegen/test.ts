@@ -278,7 +278,6 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
         if (e.trace[0]) tail.push(`  //     at ${truncate(e.trace[0], 100)}`);
       }
     }
-    tail.push(`  test.info().annotations.push({ type: ${str(ERRORS_ANNOTATION)}, description: JSON.stringify(errors) });`);
     tail.push("  expect(errors, 'the page should not throw while replaying the recorded steps').toEqual([]);");
   }
   // After the error check: if the page crashed, the expected text never shows up, and a
@@ -324,10 +323,17 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   if (assertNoErrors) {
     out.push(
       '  const errors: string[] = [];',
-      "  page.on('pageerror', (err) => errors.push(err.message));",
+      '  // Reported to `bugprint verify` even when a later step fails first (the annotation is live).',
+      `  const observed = { type: ${str(ERRORS_ANNOTATION)}, description: '[]' };`,
+      '  test.info().annotations.push(observed);',
+      '  const record = (message: string) => {',
+      '    errors.push(message);',
+      '    observed.description = JSON.stringify(errors);',
+      '  };',
+      "  page.on('pageerror', (err) => record(err.message));",
       "  page.on('console', (msg) => {",
       '    // The browser logs every failed request as an error; network failures are not page errors.',
-      "    if (msg.type() === 'error' && !msg.text().startsWith('Failed to load resource')) errors.push(msg.text());",
+      "    if (msg.type() === 'error' && !msg.text().startsWith('Failed to load resource')) record(msg.text());",
       '  });',
       '',
     );
@@ -348,7 +354,17 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   };
 
   function networkKey(c: NetworkCall): string {
-    return originOf(c.url) === recordedOrigin ? pathOf(c.url) : c.url;
+    // Requests never carry the #fragment, so the key must not either.
+    const u = c.url.replace(/#.*$/, '');
+    return originOf(u) === recordedOrigin ? pathOf(u) : u;
+  }
+
+  /**
+   * Controls inside a list row are often only shown while the row is hovered (delete buttons,
+   * row menus). The user hovered the row before clicking; do the same so the control is visible.
+   */
+  function hover(t: { hoverCode?: string }): string[] {
+    return t.hoverCode ? [`  await ${t.hoverCode}.hover();`] : [];
   }
 
   function url(u: string): string {
@@ -370,11 +386,11 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
       case 'expectUrl':
         return [`  await expect(page).toHaveURL(${url(s.url)});`];
       case 'click':
-        return [`  await ${s.target.code}.click();`];
+        return [...hover(s.target), `  await ${s.target.code}.click();`];
       case 'dblclick':
-        return [`  await ${s.target.code}.dblclick();`];
+        return [...hover(s.target), `  await ${s.target.code}.dblclick();`];
       case 'rightclick':
-        return [`  await ${s.target.code}.click({ button: 'right' });`];
+        return [...hover(s.target), `  await ${s.target.code}.click({ button: 'right' });`];
       case 'check':
         return [`  await ${s.target.code}.check();`];
       case 'uncheck':
@@ -408,13 +424,20 @@ const SERVE_HELPER = [
   '    queues.set(key, [...(queues.get(key) ?? []), r]);',
   '  }',
   '  const base = new URL(BASE_URL).origin;',
+  '  const keyOf = (method: string, u: URL) => `${method} ${u.origin === base ? u.pathname + u.search : u.origin + u.pathname + u.search}`;',
   "  await page.route('**/*', (route) => {",
   '    const req = route.request();',
   '    const u = new URL(req.url());',
-  '    const queue = queues.get(`${req.method()} ${u.origin === base ? u.pathname + u.search : u.href}`);',
+  '    // Cross-origin APIs need CORS headers on the mocked response, and their preflight answered.',
+  "    const origin = req.headers()['origin'];",
+  "    const cors: Record<string, string> = u.origin !== base && origin ? { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true' } : {};",
+  "    if (req.method() === 'OPTIONS' && [...queues.keys()].some((k) => k.slice(k.indexOf(' ') + 1) === keyOf('', u).trim())) {",
+  "      return route.fulfill({ status: 204, headers: { ...cors, 'access-control-allow-methods': '*', 'access-control-allow-headers': req.headers()['access-control-request-headers'] ?? '*' } });",
+  '    }',
+  '    const queue = queues.get(keyOf(req.method(), u));',
   '    if (!queue?.length) return route.fallback();',
   '    const r = queue.length > 1 ? queue.shift()! : queue[0]!;',
-  '    return route.fulfill({ status: r.status, contentType: r.contentType ?? undefined, body: r.body });',
+  '    return route.fulfill({ status: r.status, contentType: r.contentType ?? undefined, headers: cors, body: r.body });',
   '  });',
   '}',
   '',

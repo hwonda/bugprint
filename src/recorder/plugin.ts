@@ -15,6 +15,8 @@ export const PLUGIN_NAME = 'bugprint/interaction@1';
 export type InteractionPayload =
   | { type: 'storage'; origin: string; localStorage: Record<string, string>; cookies: Record<string, string>; masked: string[] }
   | { type: 'key'; key: string; id: number | null }
+  /** The focused element when recording starts (an autofocused field gets no focus event). */
+  | { type: 'focus'; id: number | null }
   | { type: 'nav'; href: string; via: 'push' | 'replace' | 'back' | 'forward' | 'pop' };
 
 export interface BugprintRecordOptions {
@@ -50,8 +52,6 @@ const WORDS = [
   'xsrf',
   'sid',
   'apikey',
-  'cookie',
-  'cookies',
   'otp',
   'pin',
   'ssn',
@@ -128,12 +128,23 @@ export function getRecordBugprintPlugin(options: BugprintRecordOptions = {}) {
         const cookies: Record<string, string> = {};
         for (const part of win.document.cookie ? win.document.cookie.split('; ') : []) {
           const eq = part.indexOf('=');
-          const k = decodeURIComponent(eq === -1 ? part : part.slice(0, eq));
+          const rawName = eq === -1 ? part : part.slice(0, eq);
+          let k = rawName;
+          try {
+            k = decodeURIComponent(rawName);
+          } catch {
+            // A malformed escape in one cookie name must not abort the whole recording.
+          }
           const v = eq === -1 ? '' : part.slice(eq + 1);
           if (keep(k, v)) cookies[k] = v;
         }
         emit({ type: 'storage', origin: win.location.origin, localStorage, cookies, masked });
       }
+
+      // ---- initial focus --------------------------------------------------
+      const focused = win.document.activeElement;
+      const focusedId = focused && focused !== win.document.body && mirror ? mirror.getId(focused) : -1;
+      emit({ type: 'focus', id: focusedId >= 0 ? focusedId : null });
 
       // ---- keys -----------------------------------------------------------
       const onKey = (e: KeyboardEvent) => {

@@ -19,18 +19,12 @@ export function redactValue(value: string): string {
 }
 
 /**
- * Lighter redaction for recorded API responses: only e-mail addresses inside
- * string values. Numbers and ids are kept, because the app may use them in
- * later requests and the recorded responses have to keep lining up.
+ * Lighter redaction for recorded API responses and storage: only e-mail addresses.
+ * Numbers and ids are kept byte for byte, because the app may use them in later
+ * requests and the recorded responses have to keep lining up.
  */
-export function redactBody(body: string, contentType: string | null): string {
-  const emails = (s: string) => s.replace(EMAIL, 'user@example.com');
-  if (contentType?.includes('json')) {
-    try {
-      return JSON.stringify(JSON.parse(body), (_k, v) => (typeof v === 'string' ? emails(v) : v));
-    } catch {
-      /* not actually JSON */
-    }
-  }
-  return emails(body);
+export function redactBody(body: string, _contentType: string | null = null): string {
+  // Plain text replacement is safe inside JSON too: the e-mail pattern cannot contain quotes
+  // or backslashes. Parsing and re-serialising would alter numbers (64-bit ids, 1.50 → 1.5).
+  return body.replace(EMAIL, 'user@example.com');
 }

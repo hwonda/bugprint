@@ -53,3 +53,19 @@ load_session → summarize_session → generate_test (with expectVisibleText "Or
 The run took 17 turns, 67 s, and cost $0.40. The fix was correct.
 
 It also found a bugprint bug: the "expected text is visible" assertion came _before_ the error check, so a crash surfaced as a timeout (`failed-differently`). Assertions are now ordered the other way round, and a test covers it.
+
+## 5. A real third-party app
+
+A scripted session on the public React TodoMVC demo covered adding todos with Enter, toggling one, switching filters (hash routes), double-click editing, deleting via a hover-only button, and "Clear completed". The generated test was then replayed against the live app, with the end state the recording showed as the assertion.
+
+| Found                                                                                                                                       | Fix                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 13 of 33 steps were fake. React sets `.value` and `.checked` in code when it renders a row, and rrweb records those changes like user input | Accept input only on the focused element. Use rrweb's `userTriggered` flag when present, and record the initially focused element |
+| The delete button is `display: none` until the row is hovered, so replay waited forever                                                     | Hover the row before clicking a control scoped to it                                                                              |
+| An init script that runs in every frame made rrweb record the page and its iframe, and the page died of infinite recursion                  | This one is setup, not bugprint. The README now says to start recording in the top window only                                    |
+
+After the fixes, the session has the 20 real steps, and the replay reaches the recorded end state.
+
+## 6. Independent code review
+
+A fresh reviewer, given only the code, produced 18 findings. All of them were real and are fixed, each with a regression test (`test/bugfix.test.ts`, `test/bugfix.e2e.test.ts`). The main ones: the JSON round trip that changed recorded numbers, missing CORS on mocked cross-origin responses, setup-project dependencies in the verify wrapper, a malformed cookie aborting recording, and errors not reported when a later step failed first. The full list is in `CHANGELOG.md`.

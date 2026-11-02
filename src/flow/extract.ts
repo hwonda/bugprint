@@ -2,7 +2,7 @@ import { VirtualDom, type VNode } from '../session/dom.js';
 import type { Session } from '../session/load.js';
 import { EventType, IncrementalSource, MouseInteraction, type MutationData, type RrwebEvent } from '../session/types.js';
 import { interactiveTarget } from '../selector/aria.js';
-import { buildLocator, renderLocator, type Locator } from '../selector/locator.js';
+import { buildLocator, renderLocator, resolve, type Locator } from '../selector/locator.js';
 
 export interface Target {
   nodeId: number;
@@ -10,6 +10,11 @@ export interface Target {
   locator: Locator;
   /** Ready-to-paste locator expression, e.g. `page.getByRole('button', { name: 'Apply' })`. */
   code: string;
+  /**
+   * For controls scoped to a container (a list row, a card): the container, so the replay can
+   * hover it first. Row actions are often only visible on hover. Set only if the container is unique.
+   */
+  hoverCode?: string;
 }
 
 interface StepBase {
@@ -104,11 +109,19 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
   let href = '';
   let sawLoadSinceMeta = false;
   let lastActionAt = -Infinity;
+  /**
+   * The element user input can currently go to. rrweb also records *programmatic* value
+   * changes (a framework rendering a new row sets its input's value), and those must not
+   * become test steps. 'unknown' until the first focus/click information arrives.
+   */
+  let active: number | null | 'unknown' = 'unknown';
 
   const target = (node: VNode): Target => {
     const locator = buildLocator(dom!, node);
     if (locator.confidence === 'low') warnings.add(`Low-confidence locator for ${locator.description}; consider adding a data-testid.`);
-    return { nodeId: node.id, tag: node.tagName, locator, code: renderLocator(locator) };
+    const container = locator.chain.length > 1 ? { chain: [locator.chain[0]!] } : null;
+    const hoverCode = container && resolve(dom!, container).length === 1 ? renderLocator(container) : undefined;
+    return { nodeId: node.id, tag: node.tagName, locator, code: renderLocator(locator), ...(hoverCode ? { hoverCode } : {}) };
   };
   const last = () => steps.at(-1);
 
@@ -177,10 +190,21 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
         return;
 
       case IncrementalSource.MouseInteraction: {
+        if (d.type === MouseInteraction.Focus) {
+          active = d.id;
+          return;
+        }
+        if (d.type === MouseInteraction.Blur) {
+          if (active === d.id || active === 'unknown') active = null;
+          return;
+        }
         const raw = dom!.get(d.id);
         if (!raw) {
           if ([MouseInteraction.Click, MouseInteraction.DblClick].includes(d.type)) warnings.add(`Click on unknown node #${d.id} skipped.`);
           return;
+        }
+        if (d.type === MouseInteraction.Click || d.type === MouseInteraction.MouseDown) {
+          active = focusTargetOf(raw);
         }
         if (d.type === MouseInteraction.Click) {
           const p = last();
@@ -210,8 +234,9 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
         if (!node) return;
         const text = String(d.text ?? '');
         dom!.setValue(node.id, text, d.isChecked);
-        lastActionAt = t;
         const type = (node.attributes.type ?? '').toLowerCase();
+        if (!isUserInput(node, type, d.userTriggered)) return;
+        lastActionAt = t;
 
         if (node.tagName === 'input' && (type === 'checkbox' || type === 'radio')) {
           if (type === 'radio' && !d.isChecked) return; // the sibling that got unchecked
@@ -241,6 +266,23 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     }
   }
 
+  function isUserInput(node: VNode, type: string, userTriggered: unknown): boolean {
+    if (typeof userTriggered === 'boolean') return userTriggered; // recorded with userTriggeredOnInput
+    if (active === node.id) return true;
+    if (active !== 'unknown') return false;
+    // No focus information yet (e.g. an autofocused field): accept typing, not toggles.
+    return !(node.tagName === 'input' && (type === 'checkbox' || type === 'radio')) && node.tagName !== 'select';
+  }
+
+  /** Clicking a <label> focuses (and toggles) its control. */
+  function focusTargetOf(node: VNode): number {
+    const label = node.tagName === 'label' ? node : [...dom!.ancestors(node)].find((a) => a.tagName === 'label');
+    if (!label) return node.id;
+    if (label.attributes.for) return dom!.byId(label.attributes.for)?.id ?? node.id;
+    for (const d of dom!.descendants(label)) if (['input', 'select', 'textarea'].includes(d.tagName)) return d.id;
+    return node.id;
+  }
+
   /** A click that only focused a field (or toggled it via its label) is implied by fill/check. */
   function dropClicksLeadingTo(node: VNode, t: number) {
     const p = last();
@@ -262,7 +304,7 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
   function handlePlugin(ev: RrwebEvent, t: number) {
     const plugin = String(ev.data?.plugin ?? '');
     const p = ev.data?.payload ?? {};
-    if (plugin.startsWith('rrweb/console')) {
+    if (plugin.includes('console')) {
       capabilities.console = true;
       const level = String(p.level ?? '');
       if (level !== 'error' && level !== 'warn' && level !== 'assert') return;
@@ -284,7 +326,9 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     if (!API_INITIATORS.has(initiatorType)) return;
     const url = String(r.name ?? r.url ?? '');
     if (!url) return;
-    const status = Number(r.status ?? 0);
+    // Entries from the performance observer carry no status; that is not a failure.
+    const hasStatus = typeof r.status === 'number';
+    const status = hasStatus ? (r.status as number) : 200;
     const headers: Record<string, string> = r.responseHeaders ?? {};
     const contentType = Object.entries(headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1] ?? null;
     const body = r.responseBody;
@@ -298,7 +342,7 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
       responseBody: body === undefined || body === null ? null : typeof body === 'string' ? body : stringify(body),
     };
     network.push(call);
-    if (status === 0 || status >= 500) {
+    if (hasStatus && (status === 0 || status >= 500)) {
       signals.push({
         t,
         kind: 'network-error',
@@ -324,6 +368,11 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
       }
       return;
     }
+    if (p.type === 'focus') {
+      if (typeof p.id === 'number') active = p.id;
+      else if (active === 'unknown') active = null;
+      return;
+    }
     if (p.type === 'key') {
       const node = typeof p.id === 'number' ? dom?.get(p.id) : undefined;
       const focusable = node && node.tagName !== 'body' && node.tagName !== 'html' ? node : undefined;
@@ -336,6 +385,9 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
       if (!next || next === href) return;
       if (!pages.includes(next)) pages.push(next);
       if (p.via === 'back' || p.via === 'forward') steps.push({ kind: p.via, t, url: next });
+      // An unclassified popstate right after a click is an in-page #anchor; otherwise it is the
+      // browser Back button to a page from before the recording (nothing in the replay would get there).
+      else if (p.via === 'pop' && !(t - lastActionAt <= NAV_WINDOW_MS)) steps.push({ kind: 'back', t, url: next });
       else steps.push({ kind: 'expectUrl', t, url: next });
       href = next;
     }

@@ -1,3 +1,5 @@
+import { rewriteJsonStrings } from './json-rewrite.js';
+
 /**
  * Secret detection for recorded data that ends up in a test file (and usually
  * in a git repository): API responses, storage values, typed values.
@@ -22,8 +24,6 @@ const WORDS = new Set([
   'xsrf',
   'sid',
   'apikey',
-  'cookie',
-  'cookies',
   'otp',
   'pin',
   'ssn',
@@ -82,34 +82,22 @@ export interface SecretRedaction {
  */
 export function redactSecrets(body: string, contentType: string | null = null): SecretRedaction {
   let count = 0;
-  const text = (s: string) => {
-    const r = redactSecretText(s);
-    if (r !== s) count++;
+  const text = (v: string) => {
+    const r = redactSecretText(v);
+    if (r !== v) count++;
     return r;
   };
   const looksJson = contentType?.includes('json') || /^\s*[[{]/.test(body);
   if (looksJson) {
-    try {
-      const walk = (v: unknown, sensitive: boolean): unknown => {
-        if (typeof v === 'string') {
-          if (sensitive && v) {
-            count++;
-            return 'redacted';
-          }
-          return text(v);
-        }
-        if (Array.isArray(v)) return v.map((x) => walk(x, sensitive));
-        if (v && typeof v === 'object') {
-          return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, sensitive || isSensitiveKey(k))]));
-        }
-        return v;
-      };
-      const out = JSON.stringify(walk(JSON.parse(body), false));
-      return { value: count ? out : body, count };
-    } catch {
-      /* not JSON after all */
-    }
+    // Rewrites only the affected strings; everything else (numbers, spacing) stays byte-identical.
+    const out = rewriteJsonStrings(body, (v, keys) => {
+      if (v && keys.some(isSensitiveKey)) {
+        count++;
+        return 'redacted';
+      }
+      return text(v);
+    });
+    if (out !== null) return { value: out, count };
   }
-  const value = text(body);
-  return { value, count };
+  return { value: text(body), count };
 }

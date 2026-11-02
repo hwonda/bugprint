@@ -28,13 +28,9 @@ function collectEvents(value: unknown, depth = 0): RrwebEvent[] {
     if (direct.length) return direct;
     return value.flatMap((v) => (Array.isArray(v) || (v && typeof v === 'object') ? collectEvents(v, depth + 1) : []));
   }
-  // Prefer the property holding the most events (ignores small metadata arrays).
-  let best: RrwebEvent[] = [];
-  for (const v of Object.values(value)) {
-    const found = collectEvents(v, depth + 1);
-    if (found.length > best.length) best = found;
-  }
-  return best;
+  // Merge events from every property: segments are sometimes keyed by id ({ "0": [...], "1": [...] }).
+  // Copies of the same events (e.g. { events, backup }) are removed by the de-duplication later.
+  return Object.values(value).flatMap((v) => collectEvents(v, depth + 1));
 }
 
 export function parseEvents(raw: unknown): RrwebEvent[] {
@@ -65,7 +61,9 @@ export function parseEvents(raw: unknown): RrwebEvent[] {
   // De-duplicate events repeated across overlapping segments, then order by time.
   const seen = new Set<string>();
   const unique = events.filter((e) => {
-    const key = `${e.timestamp}:${e.type}:${JSON.stringify(e.data)}`;
+    // Full snapshots can be megabytes: identify them by their root node instead of serialising.
+    const key =
+      e.type === EventType.FullSnapshot ? `${e.timestamp}:2:${e.data?.node?.id}` : `${e.timestamp}:${e.type}:${JSON.stringify(e.data)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

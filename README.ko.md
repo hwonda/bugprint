@@ -190,6 +190,7 @@ import { getRecordBugprintPlugin } from 'bugprint/recorder';
 
 record({
   emit: (e) => events.push(e),
+  userTriggeredOnInput: true, // tells user typing apart from values set by your framework
   plugins: [
     getRecordConsolePlugin({ level: ['error', 'warn'] }), // errors → the assertion
     getRecordNetworkPlugin({ recordBody: true }), // API responses → replayed in the test
@@ -207,6 +208,11 @@ record({
 `bugprint/recorder`는 의존성이 없고 크기는 약 6KB입니다. 녹화를 시작할 때 localStorage와 읽을 수 있는 쿠키를 저장합니다. 민감한 키(`accessToken`, `sessionId`, `apiKey`, `password`, `csrf` 등)는 이름만 남기고, 값은 브라우저 밖으로 내보내지 않습니다. 키는 단어 단위로 판단하므로 `author`가 `auth`로 걸리지 않습니다. 직접 추가하려면 `sensitiveKeys`를 쓰세요.
 
 일반 타이핑은 녹화하지 않고, 특수 키와 Ctrl/Meta/Alt 단축키만 녹화합니다. 입력 필드의 값은 rrweb이 이미 녹화하고, rrweb 자체의 마스킹도 적용됩니다.
+
+녹화를 설정할 때 두 가지를 지켜 주세요.
+
+- **`record()`는 최상위 창에서만 시작하세요.** 같은 도메인의 iframe은 rrweb이 알아서 녹화합니다. 녹화 스크립트가 iframe 안에서도 실행되면(태그 매니저나, 모든 프레임에 주입되는 init script 등) 녹화기 두 개가 서로를 쫓다가 페이지가 "Maximum call stack size exceeded"로 멈춥니다.
+- **`userTriggeredOnInput`을 켜세요.** 프레임워크는 화면을 그릴 때 입력 필드 값을 코드로 넣는데, rrweb은 이것도 녹화합니다. bugprint는 포커스가 어디 있는지를 추적해서 이런 값을 걸러내고, 이 옵션을 켜면 정확하게 구분합니다.
 
 ---
 

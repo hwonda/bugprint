@@ -23,6 +23,7 @@ describe('bugprint/recorder in a browser', () => {
       localStorage.setItem('authToken', 'eyJ-secret');
       document.cookie = 'lang=ko';
       document.cookie = 'session_id=abc';
+      document.cookie = 'promo%zz=1'; // malformed escape in the name must not abort recording
     });
     await page.goto('http://localhost:4174/');
     await page.getByRole('searchbox', { name: 'Search products' }).fill('mouse');
@@ -39,7 +40,7 @@ describe('bugprint/recorder in a browser', () => {
     const payloads = events.filter((e) => e.type === 6 && e.data.plugin === 'bugprint/interaction@1').map((e) => e.data.payload);
     const storage = payloads.find((p) => p.type === 'storage');
     expect(storage.localStorage).toEqual({ theme: 'dark' });
-    expect(storage.cookies).toEqual({ lang: 'ko' });
+    expect(storage.cookies).toEqual({ lang: 'ko', 'promo%zz': '1' });
     expect(storage.masked.sort()).toEqual(['authToken', 'session_id']);
     expect(JSON.stringify(events)).not.toContain('eyJ-secret');
 
