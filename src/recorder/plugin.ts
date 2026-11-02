@@ -24,13 +24,34 @@ export interface BugprintRecordOptions {
   shortcuts?: boolean;
   /** Snapshot localStorage and readable cookies when recording starts. Default true. */
   storage?: boolean;
-  /** Storage keys never captured (their names are reported, their values never leave the browser). */
+  /**
+   * Extra storage keys never captured, on top of the built-in check (token, secret, password,
+   * sessionId, apiKey, ...). Their names are reported; their values never leave the browser.
+   */
   sensitiveKeys?: RegExp;
   /** Skip values longer than this many characters. Default 20000. */
   maxValueLength?: number;
 }
 
-const SENSITIVE = /token|auth|session|secret|passw|jwt|credential|api[-_]?key|private|csrf|xsrf|sid$|^__bugprint/i;
+// Must match isSensitiveKey() in src/codegen/secrets.ts (a test checks they agree).
+// Duplicated because this file is shipped to browsers on its own, without imports.
+const WORDS = ['token', 'tokens', 'secret', 'secrets', 'password', 'passwd', 'pwd', 'jwt', 'credential', 'credentials', 'csrf', 'xsrf', 'sid', 'apikey', 'cookie', 'cookies', 'otp', 'pin', 'ssn'];
+const PAIRS = [['api', 'key'], ['private', 'key'], ['access', 'key'], ['secret', 'key'], ['session', 'id'], ['session', 'key'], ['client', 'secret']];
+const WHOLE = ['auth', 'authorization', 'session', 'bearer', 'signature'];
+
+export function isSensitiveKey(key: string): boolean {
+  if (key.startsWith('__bugprint')) return true; // our own bookkeeping
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (!words.length) return false;
+  if (WHOLE.includes(words.join(''))) return true;
+  if (words.some((w) => WORDS.includes(w))) return true;
+  return PAIRS.some(([a, b]) => words.some((w, i) => w === a && words[i + 1] === b));
+}
 
 const DEFAULT_KEYS = ['Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', 'Delete'];
 
@@ -57,11 +78,11 @@ export function getRecordBugprintPlugin(options: BugprintRecordOptions = {}) {
 
       // ---- initial storage ------------------------------------------------
       if (options.storage ?? true) {
-        const sensitive = options.sensitiveKeys ?? SENSITIVE;
+        const custom = options.sensitiveKeys;
         const max = options.maxValueLength ?? 20_000;
         const masked: string[] = [];
         const keep = (k: string, v: string) => {
-          if (sensitive.test(k)) masked.push(k);
+          if (isSensitiveKey(k) || custom?.test(k)) masked.push(k);
           else if (v.length <= max) return true;
           return false;
         };

@@ -132,6 +132,8 @@ export function createServer(store = new SessionStore()): McpServer {
         freezeTime: z.boolean().optional().describe('Start the browser clock at the recording time. Default true.'),
         startFrom: z.string().optional().describe('Start at this navigation step id (opens its URL directly and skips earlier steps).'),
         restoreStorage: z.boolean().optional().describe('Restore localStorage/cookies captured when the recording started. Default true.'),
+        storageState: z.string().optional().describe('Storage state file for a logged-in user (cookies + localStorage). Recorded localStorage is layered on top.'),
+        keepSecrets: z.boolean().optional().describe('Keep tokens/API keys in recorded responses and storage. Default false.'),
         outputPath: z.string().optional().describe('Write the test here (e.g. tests/repro/checkout.spec.ts).'),
         overwrite: z.boolean().optional().describe('Allow replacing an existing file at outputPath.'),
       },
@@ -172,10 +174,15 @@ export function createServer(store = new SessionStore()): McpServer {
         cwd: z.string().optional().describe('Project root containing the test runner config. Defaults to the server working directory.'),
         timeoutMs: z.number().int().positive().optional().describe('Kill the run after this long. Default 180000.'),
         allProjects: z.boolean().optional().describe('Run every configured browser project instead of the first one.'),
+        config: z.string().optional().describe('Test runner config to use. Default: nearest playwright.config.* above the test file.'),
+        expect: z
+          .enum(['reproduced', 'passed', 'failed-differently', 'failed', 'error'])
+          .optional()
+          .describe('The verdict you expect (e.g. "reproduced" before a fix, "passed" after). Adds ok: true/false.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ testPath, baseUrl, cwd, timeoutMs, allProjects }) => json(await verifyTest(testPath, { baseUrl, cwd, timeoutMs, allProjects })),
+    async ({ testPath, ...rest }) => json(await verifyTest(testPath, rest)),
   );
 
   server.registerTool(
@@ -195,6 +202,9 @@ export function createServer(store = new SessionStore()): McpServer {
         cwd: z.string().optional().describe('Project root containing the test runner config.'),
         workers: z.number().int().positive().optional().describe('Parallel workers per round. Default 4.'),
         maxRounds: z.number().int().positive().optional().describe('Upper bound on test-runner invocations. Default 12.'),
+        confirmRuns: z.number().int().positive().max(20).optional().describe('Rerun the minimal test this many times; accept only if all reproduce. Default 1.'),
+        storageState: z.string().optional(),
+        keepSecrets: z.boolean().optional(),
         mockNetwork: z.boolean().optional(),
         freezeTime: z.boolean().optional(),
         restoreStorage: z.boolean().optional(),

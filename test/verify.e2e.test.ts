@@ -56,4 +56,27 @@ describe('verifyTest (real browser)', () => {
     ]);
     expect(r.code).toContain("await page.goto(BASE_URL + '/checkout.html');");
   }, 240_000);
+
+  it('--expect sets ok and the CLI exit code', async () => {
+    const file = await writeRepro('expect');
+    const r = await verifyTest(file, { cwd: root, expect: 'passed' });
+    expect(r).toMatchObject({ verdict: 'reproduced', ok: false });
+    const { spawnSync } = await import('node:child_process');
+    const cli = (expectArg: string) =>
+      spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'verify', file, '--expect', expectArg], { cwd: root, encoding: 'utf8' }).status;
+    expect(cli('reproduced')).toBe(0);
+    expect(cli('passed')).toBe(1);
+  }, 120_000);
+
+  it('a storageState file is applied to the replay', async () => {
+    const state = path.join(root, 'test', '.tmp', 'state.json');
+    await writeFile(
+      state,
+      JSON.stringify({ cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'cart', value: '["kb","kb"]' }] }] }),
+    );
+    // Open checkout directly: the total can only be $240 if the storage state was loaded.
+    const file = await writeRepro('state', undefined, { startFrom: 's8', includeSteps: [], expectVisibleText: '$240', assertNoErrors: false, storageState: state });
+    const r = await verifyTest(file, { cwd: root });
+    expect(r.verdict, r.error).toBe('passed');
+  }, 90_000);
 });

@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ERRORS_ANNOTATION, META_PREFIX, type TestMeta } from '../codegen/test.js';
+import { sweepStale, trackChild, trackPath } from '../util/cleanup.js';
 
 export type Verdict =
   /** Failed, and the failure contains the error recorded in the session. */
@@ -26,6 +28,10 @@ export interface VerifyOptions {
   allProjects?: boolean;
   /** Errors to look for; defaults to the ones embedded in the generated test. */
   expectedErrors?: string[];
+  /** Test runner config to use. Default: the nearest playwright.config.* above the test file. */
+  config?: string;
+  /** The verdict you expect; sets `ok` on the result (and the CLI exit code). */
+  expect?: Verdict;
 }
 
 export interface VerifyResult {
@@ -37,9 +43,40 @@ export interface VerifyResult {
   recordedErrors: string[];
   matchedError?: string;
   command: string;
+  /** Present when `expect` was given: whether the verdict matched it. */
+  ok?: boolean;
 }
 
 const CONFIG_NAMES = ['playwright.config.ts', 'playwright.config.mts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs'];
+const WRAPPER_PREFIX = '.bugprint-run-';
+
+/** Nearest runner config at or above `from` (works in monorepos where tests live in a package). */
+export function findConfig(from: string): string | undefined {
+  let dir = path.resolve(from);
+  for (;;) {
+    const hit = CONFIG_NAMES.map((n) => path.join(dir, n)).find((p) => existsSync(p));
+    if (hit) return hit;
+    const up = path.dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+}
+
+/**
+ * Resolves the runner's CLI entry so we can start it as `node cli.js`. This avoids
+ * shell shims (`.bin/playwright.cmd` cannot be spawned without a shell on Windows).
+ */
+export function findRunnerCli(from: string): string | null {
+  const req = createRequire(path.join(path.resolve(from), 'noop.js'));
+  for (const id of ['@playwright/test/cli', 'playwright/cli']) {
+    try {
+      return req.resolve(id);
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
 
 export async function verifyTest(testPath: string, opts: VerifyOptions = {}): Promise<VerifyResult> {
   const [r] = await verifyTests([testPath], opts);
@@ -66,29 +103,38 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   const started = Date.now();
   const timeoutMs = opts.timeoutMs ?? 180_000;
 
-  const bin = findRunner(cwd);
+  const userConfig = opts.config ? path.resolve(cwd, opts.config) : findConfig(dir);
+  if (opts.config && !existsSync(userConfig!)) {
+    return files.map((_, i) => makeResult(i, 'error', `Config not found: ${userConfig}`));
+  }
+  // Run from the config's directory, like the runner itself would.
+  const runDir = userConfig ? path.dirname(userConfig) : cwd;
+  const cli = findRunnerCli(runDir) ?? findRunnerCli(dir);
   let command = '';
   const all = (verdict: Verdict, summary: string, error?: string) =>
     files.map((_, i) => makeResult(i, verdict, summary, error));
-  if (!bin) {
+  if (!cli) {
     return all('error', 'The test runner is not installed in this project. Run: npm i -D @playwright/test && npx playwright install chromium');
   }
 
-  const userConfig = CONFIG_NAMES.map((n) => path.join(cwd, n)).find((p) => existsSync(p));
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'bugprint-run-'));
+  const releaseTmp = trackPath(tmp);
   const reportFile = path.join(tmp, 'report.json');
   // The wrapper must sit next to the user's config: relative paths in it (webServer.cwd,
   // globalSetup, outputDir...) are resolved against the config file's directory.
   const ext = userConfig ? path.extname(userConfig) : '.mjs';
-  const wrapper = path.join(userConfig ? path.dirname(userConfig) : tmp, `.bugprint-run-${process.pid}-${Date.now()}.config${ext}`);
+  const wrapperDir = userConfig ? path.dirname(userConfig) : tmp;
+  sweepStale(wrapperDir, WRAPPER_PREFIX);
+  const wrapper = path.join(wrapperDir, `${WRAPPER_PREFIX}${process.pid}-${Date.now()}.config${ext}`);
+  const releaseWrapper = trackPath(wrapper);
   const workers = opts.workers ?? (files.length > 1 ? 4 : 1);
   await writeFile(wrapper, wrapperConfig(userConfig, dir, files.map((f) => path.basename(f)), opts.allProjects ?? false, workers), 'utf8');
 
   const args = ['test', '--config', wrapper, '--reporter', 'json'];
-  command = `${path.relative(cwd, bin) || bin} ${args.join(' ')}`;
+  command = `node ${path.relative(runDir, cli)} ${args.join(' ')}`;
   try {
-    const run = await exec(bin, args, {
-      cwd,
+    const run = await exec(process.execPath, [cli, ...args], {
+      cwd: runDir,
       timeoutMs,
       env: {
         ...process.env,
@@ -115,6 +161,8 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   } finally {
     await rm(wrapper, { force: true });
     await rm(tmp, { recursive: true, force: true });
+    releaseWrapper();
+    releaseTmp();
   }
 
   function interpret(i: number, tests: ReportTest[], globalError: string): VerifyResult {
@@ -135,7 +183,7 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
     }
     const errors = failed.errors?.length ? failed.errors : failed.error ? [failed.error] : [];
     const message = clean(errors.map((e) => e.message ?? '').join('\n\n')) || `Test ${failed.status}.`;
-    const line = errors.find((e) => e.location?.file && path.resolve(e.location.file) === file)?.location?.line;
+    const line = errors.find((e) => e.location?.file && samePath(e.location.file, file))?.location?.line;
     const step = line ? stepAt(source, line) : undefined;
 
     // Compare with the errors the page actually produced. Never with the raw failure message:
@@ -159,7 +207,17 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   }
 
   function makeResult(i: number, verdict: Verdict, summary: string, error?: string, failedStep?: VerifyResult['failedStep'], matchedError?: string): VerifyResult {
-    return { verdict, summary, durationMs: Date.now() - started, failedStep, error: error ? tail(error, 4000) : undefined, recordedErrors: recordedFor(i), matchedError, command };
+    return {
+      verdict,
+      summary,
+      durationMs: Date.now() - started,
+      failedStep,
+      error: error ? tail(error, 4000) : undefined,
+      recordedErrors: recordedFor(i),
+      matchedError,
+      command,
+      ...(opts.expect ? { ok: verdict === opts.expect } : {}),
+    };
   }
 }
 
@@ -221,20 +279,10 @@ export default { ...b, testDir: ${JSON.stringify(testDir)}, testMatch: ${JSON.st
 `;
 }
 
-function findRunner(cwd: string): string | null {
-  let dir = cwd;
-  for (;;) {
-    const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright');
-    if (existsSync(bin)) return bin;
-    const up = path.dirname(dir);
-    if (up === dir) return null;
-    dir = up;
-  }
-}
-
 function exec(cmd: string, args: string[], o: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }) {
   return new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
-    const child = spawn(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const release = trackChild(child);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -246,10 +294,12 @@ function exec(cmd: string, args: string[], o: { cwd: string; env: NodeJS.Process
     }, o.timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
+      release();
       resolve({ code, stdout, stderr, timedOut });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
+      release();
       resolve({ code: null, stdout, stderr: String(err), timedOut });
     });
   });
@@ -286,6 +336,11 @@ interface Report {
 
 function collectTests(suites: ReportSuite[]): ReportTest[] {
   return suites.flatMap((s) => [...(s.specs ?? []).flatMap((sp) => sp.tests ?? []), ...collectTests(s.suites ?? [])]);
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return norm(a) === norm(b);
 }
 
 // eslint-disable-next-line no-control-regex

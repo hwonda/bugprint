@@ -3,6 +3,7 @@ import path from 'node:path';
 import { generateTest, selectSteps, type GenerateOptions } from '../codegen/test.js';
 import type { Flow, Step } from '../flow/extract.js';
 import { describeStep } from '../flow/summarize.js';
+import { sweepStale, trackPath } from '../util/cleanup.js';
 import { verifyTests, type VerifyResult } from '../verify/run.js';
 
 /**
@@ -25,6 +26,11 @@ export interface MinimizeOptions extends Omit<GenerateOptions, 'includeSteps' | 
   timeoutMs?: number;
   /** Stop after this many runner invocations. Default 12. */
   maxRounds?: number;
+  /**
+   * Run the minimal test this many times (in parallel, one invocation) and accept it only
+   * if every run reproduces. Use > 1 for bugs that might be flaky. Default 1.
+   */
+  confirmRuns?: number;
   onProgress?: (message: string, round: number) => void;
 }
 
@@ -34,7 +40,9 @@ export interface Candidate {
 }
 
 export interface MinimizeResult {
-  verdict: 'minimized' | 'already-minimal' | 'not-reproduced' | 'error';
+  verdict: 'minimized' | 'already-minimal' | 'not-reproduced' | 'flaky' | 'error';
+  /** How many of the confirmation runs reproduced (when confirmRuns > 1). */
+  confirmed?: { reproduced: number; runs: number };
   summary: string;
   baseline: VerifyResult;
   original: { steps: number };
@@ -54,8 +62,11 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
   const cwd = path.resolve(opts.cwd ?? process.cwd());
   const maxRounds = opts.maxRounds ?? 12;
   // Candidate files must live inside the project so they can import the test runner.
-  await mkdir(path.join(cwd, '.bugprint'), { recursive: true });
-  const work = await mkdtemp(path.join(cwd, '.bugprint', 'minimize-'));
+  const base = path.join(cwd, '.bugprint');
+  await mkdir(base, { recursive: true });
+  sweepStale(base, 'minimize-');
+  const work = await mkdtemp(path.join(base, `minimize-${process.pid}-`));
+  const releaseWork = trackPath(work);
   const cache = new Map<string, VerifyResult>();
   let rounds = 0;
   let testsRun = 0;
@@ -147,6 +158,12 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
       // Should not happen (every accepted candidate reproduced), but never return an unverified test.
       return done('error', 'The minimal candidate did not reproduce on its own run; the bug may be flaky.', baseline, null);
     }
+    let confirmed: MinimizeResult['confirmed'];
+    const confirmRuns = Math.max(1, opts.confirmRuns ?? 1);
+    if (confirmRuns > 1) {
+      const results = await runCopies(final, confirmRuns);
+      confirmed = { reproduced: results.filter(ok).length, runs: confirmRuns };
+    }
     const minimalSteps = selectSteps(flow, { startFrom: final.startFrom ?? undefined, includeSteps: final.include });
     const keptIds = new Set(minimalSteps.map((s) => s.id));
     const removed = all.filter((s) => !keptIds.has(s.id)).map((s) => `${s.id} · ${describeStep(s)}`);
@@ -157,13 +174,43 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
       steps: minimalSteps.length,
       description: minimalSteps.map((s) => `${s.id} · ${describeStep(s.id === final.startFrom ? { ...s, kind: 'goto' } : s)}`),
     };
+    if (confirmed && confirmed.reproduced < confirmed.runs) {
+      const r = done(
+        'flaky',
+        `The minimal test reproduced only ${confirmed.reproduced}/${confirmed.runs} times. The bug (or the shortened test) is not deterministic; prefer the full test, or rerun with a larger confirmRuns.`,
+        baseline,
+        minimal,
+        removed,
+        code,
+      );
+      return { ...r, confirmed };
+    }
     const verdict = removed.length ? 'minimized' : 'already-minimal';
     const summary = removed.length
-      ? `Reduced ${all.length} steps to ${minimalSteps.length}; the shorter test still fails with the recorded error.`
+      ? `Reduced ${all.length} steps to ${minimalSteps.length}; the shorter test still fails with the recorded error${confirmed ? ` (${confirmed.runs}/${confirmed.runs} confirmation runs)` : ''}.`
       : 'Every step is needed to reproduce the bug.';
-    return done(verdict, summary, baseline, minimal, removed, code);
+    return { ...done(verdict, summary, baseline, minimal, removed, code), ...(confirmed ? { confirmed } : {}) };
   } finally {
     await rm(work, { recursive: true, force: true });
+    releaseWork();
+  }
+
+  /** The same candidate N times, as N files in one batch. Not cached: the point is to rerun. */
+  async function runCopies(c: Candidate, n: number): Promise<VerifyResult[]> {
+    rounds++;
+    opts.onProgress?.(`round ${rounds}: confirm the minimal test ${n} times`, rounds);
+    const dir = path.join(work, `r${rounds}`);
+    await mkdir(dir);
+    const { code } = generateTest(flow, { ...genOpts, startFrom: c.startFrom ?? undefined, includeSteps: c.include, testName: 'confirm' });
+    const files = await Promise.all(
+      Array.from({ length: n }, async (_, i) => {
+        const file = path.join(dir, `confirm${i}.spec.ts`);
+        await writeFile(file, code);
+        return file;
+      }),
+    );
+    testsRun += n;
+    return verifyTests(files, { cwd, baseUrl: opts.baseUrl, workers: opts.workers, timeoutMs: opts.timeoutMs });
   }
 
   function after(id: string): string[] {

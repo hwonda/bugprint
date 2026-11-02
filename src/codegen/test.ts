@@ -2,6 +2,7 @@ import type { Flow, NetworkCall, Signal, Step } from '../flow/extract.js';
 import { describeStep, pathOf } from '../flow/summarize.js';
 import { str } from '../selector/locator.js';
 import { redactBody, redactValue } from './redact.js';
+import { isSensitiveKey, redactSecrets, redactSecretText } from './secrets.js';
 
 export interface GenerateOptions {
   /** Test title. Defaults to the first recorded error. */
@@ -18,6 +19,16 @@ export interface GenerateOptions {
   expectVisibleText?: string;
   /** Replace e-mails, phone and card numbers with structurally similar fakes. Default: true. */
   redactPii?: boolean;
+  /**
+   * Keep tokens, API keys and values under keys like `accessToken` in recorded responses and
+   * storage. Default false: they are replaced, because generated tests usually get committed.
+   */
+  keepSecrets?: boolean;
+  /**
+   * Path to a test-runner storage state file (cookies + localStorage, e.g. a logged-in user).
+   * Overridable at run time with BUGPRINT_STORAGE_STATE. Recorded localStorage is layered on top.
+   */
+  storageState?: string;
   /** Serve recorded API responses instead of hitting the live backend. Default: true when the recording has them. */
   mockNetwork?: boolean;
   /** Start the browser clock at the time the session was recorded. Default: true. */
@@ -101,6 +112,13 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   const assertNoErrors = opts.assertNoErrors ?? errors.length > 0;
   const redact = opts.redactPii ?? true;
   const freezeTime = opts.freezeTime ?? true;
+  let secretsRedacted = 0;
+  const scrub = (v: string, ct: string | null) => {
+    if (opts.keepSecrets) return v;
+    const r = redactSecrets(v, ct);
+    secretsRedacted += r.count;
+    return r.value;
+  };
 
   const recordedOrigin = originOf(flow.startUrl);
   const baseUrl = (opts.baseUrl ?? recordedOrigin ?? '').replace(/\/$/, '');
@@ -128,7 +146,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
         url: networkKey(c),
         status: c.status || 200,
         contentType: c.contentType,
-        body: redact ? redactBody(c.responseBody, c.contentType) : c.responseBody,
+        body: ((b) => (redact ? redactBody(b, c.contentType) : b))(scrub(c.responseBody, c.contentType)),
       });
     }
     if (noBody) notes.push(`${noBody} recorded API call(s) have no response body (enable recordBody in the network plugin); they go to the live backend.`);
@@ -142,6 +160,9 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   // ---- storage ---------------------------------------------------------------
   const storage = flow.initialStorage;
   const restore = (opts.restoreStorage ?? true) && storage && (Object.keys(storage.localStorage).length || Object.keys(storage.cookies).length);
+  if (opts.storageState && storage && Object.keys(storage.cookies).length) {
+    notes.push('Recorded cookies are not applied because a storageState file was given; it provides the cookies.');
+  }
   if (storage?.masked.length) {
     notes.push(`The recorder left out sensitive storage entries (${storage.masked.join(', ')}). If the bug needs a logged-in user, provide storageState yourself.`);
   }
@@ -149,11 +170,27 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     notes.push(`Initial storage was captured on ${storage.origin}, not on the start page origin; it was not restored.`);
   }
   const storageLines: string[] = [];
-  if (restore && storage && originOf(storage.origin) === recordedOrigin) {
-    const val = (v: string) => (redact ? redactBody(v, 'application/json') : v);
-    const ls = Object.entries(storage.localStorage).map(([name, value]) => `{ name: ${str(name)}, value: ${str(val(value))} }`);
-    const cookies = Object.entries(storage.cookies).map(
-      ([name, value]) => `{ name: ${str(name)}, value: ${str(val(value))}, domain: new URL(BASE_URL).hostname, path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' as const }`,
+  const restorable = Boolean(restore && storage && originOf(storage.origin) === recordedOrigin);
+  const val = (k: string, v: string) => {
+    if (!opts.keepSecrets && isSensitiveKey(k)) {
+      secretsRedacted++;
+      return null; // drop entirely: a fake token is worse than none
+    }
+    const cleaned = scrub(v, null);
+    return redact ? redactBody(cleaned, 'application/json') : cleaned;
+  };
+  const lsEntries = restorable ? Object.entries(storage!.localStorage).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v))) : [];
+  const cookieEntries = restorable ? Object.entries(storage!.cookies).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v))) : [];
+  if (opts.storageState) {
+    storageLines.push(
+      '// Storage state supplied by you (e.g. a logged-in user); BUGPRINT_STORAGE_STATE overrides it.',
+      `test.use({ storageState: process.env.BUGPRINT_STORAGE_STATE ?? ${str(opts.storageState)} });`,
+      '',
+    );
+  } else if (lsEntries.length || cookieEntries.length) {
+    const ls = lsEntries.map(([name, value]) => `{ name: ${str(name)}, value: ${str(value)} }`);
+    const cookies = cookieEntries.map(
+      ([name, value]) => `{ name: ${str(name)}, value: ${str(value)}, domain: new URL(BASE_URL).hostname, path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' as const }`,
     );
     storageLines.push(
       '// Browser storage when the recording started. Sensitive keys were never recorded.',
@@ -166,6 +203,18 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
       '',
     );
   }
+  // With a user-supplied storage state, layer the recorded localStorage on top, once per tab.
+  const seedLines: string[] = [];
+  if (opts.storageState && lsEntries.length) {
+    seedLines.push(
+      '  await page.addInitScript(([origin, items]) => {',
+      "    if (location.origin !== origin || sessionStorage.getItem('__bugprint_seeded')) return;",
+      '    for (const [k, v] of items) localStorage.setItem(k, v);',
+      "    sessionStorage.setItem('__bugprint_seeded', '1');",
+      `  }, [new URL(BASE_URL).origin, ${JSON.stringify(lsEntries)}] as const);`,
+    );
+  }
+
   if (!flow.capabilities.network) {
     notes.push('The recording has no network data, so the test runs against your live backend. Bugs that depend on API data may not reproduce. Record with the rrweb network plugin (recordBody: true) to capture responses.');
   }
@@ -176,6 +225,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   // ---- body --------------------------------------------------------------------
   const secrets: string[] = [];
   const body: string[] = [];
+  body.push(...seedLines);
   if (freezeTime) body.push(`  await page.clock.install({ time: new Date(${str(new Date(flow.recordedAt).toISOString())}) }); // when the session was recorded`);
   if (external) {
     body.push(
@@ -216,6 +266,8 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     tail.push('  // TODO: no error was recorded. Assert the expected behaviour here, e.g.:');
     tail.push("  // await expect(page.getByRole('alert')).toHaveText('Order placed');");
   }
+
+  if (secretsRedacted) notes.push(`${secretsRedacted} secret value(s) (tokens, API keys, sensitive storage keys) were replaced or left out. Pass keepSecrets to keep them.`);
 
   // ---- assemble ------------------------------------------------------------------
   const meta: TestMeta = { v: 1, session: flow.sessionId, errors: relevant.map((e) => e.message) };
@@ -310,7 +362,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
           secrets.push(name);
           return [`  await ${s.target.code}.fill(process.env.${name} ?? ''); // value was masked in the recording`];
         }
-        const value = redact ? redactValue(s.value) : s.value;
+        const value = ((v) => (opts.keepSecrets ? v : redactSecretText(v)))(redact ? redactValue(s.value) : s.value);
         const note = value !== s.value ? ' // redacted' : '';
         return [`  await ${s.target.code}.fill(${str(value)});${note}`];
       }

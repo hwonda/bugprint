@@ -31,13 +31,20 @@ Options for generate:
       --no-redact         keep typed values as recorded
       --no-mock-network   hit the live backend instead of serving recorded responses
       --no-freeze-time    do not set the browser clock to the recording time
+      --storage-state <f> storage state file for a logged-in user
+      --keep-secrets      keep tokens / API keys from the recording
 
 Options for minimize: same as generate, plus
       --workers <n>       parallel workers per round (default 4)
+      --confirm <n>       rerun the minimal test n times; all must reproduce
 
 Options for verify:
       --base-url <url>    origin to run against (BUGPRINT_BASE_URL)
+      --config <file>     test runner config (default: nearest above the test)
+      --expect <verdict>  exit 1 unless the verdict is this (reproduced | passed | ...)
       --json              print the full result as JSON
+
+Exit codes for verify: 0 ok, 1 verdict differs from --expect, 2 runner error.
 `;
 
 async function main() {
@@ -66,12 +73,20 @@ async function main() {
       'no-freeze-time': { type: 'boolean' },
       json: { type: 'boolean' },
       workers: { type: 'string' },
+      config: { type: 'string' },
+      'storage-state': { type: 'string' },
+      'keep-secrets': { type: 'boolean' },
+      confirm: { type: 'string' },
+      expect: { type: 'string' },
     },
   });
   const file = positionals[0];
   if (!file) throw new Error(`Missing file argument.\n\n${HELP}`);
   if (cmd === 'verify') {
-    const r = await verifyTest(file, { baseUrl: values['base-url'] });
+    const VERDICTS = ['reproduced', 'passed', 'failed-differently', 'failed', 'error'] as const;
+    const expected = values.expect as (typeof VERDICTS)[number] | undefined;
+    if (expected && !VERDICTS.includes(expected)) throw new Error(`--expect must be one of ${VERDICTS.join(', ')}`);
+    const r = await verifyTest(file, { baseUrl: values['base-url'], config: values.config, expect: expected });
     if (values.json) process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     else {
       const icon = { reproduced: '🐞', passed: '✅', 'failed-differently': '⚠️', failed: '❌', error: '💥' }[r.verdict];
@@ -79,7 +94,8 @@ async function main() {
       if (r.failedStep) process.stdout.write(`   at ${r.failedStep.id}: ${r.failedStep.description} (line ${r.failedStep.line})\n`);
       if (r.verdict !== 'reproduced' && r.verdict !== 'passed' && r.error) process.stdout.write(`\n${r.error}\n`);
     }
-    process.exitCode = r.verdict === 'error' ? 2 : 0;
+    if (r.ok === false) process.stdout.write(`\nexpected "${expected}", got "${r.verdict}"\n`);
+    process.exitCode = r.verdict === 'error' && expected !== 'error' ? 2 : r.ok === false ? 1 : 0;
     return;
   }
   const session = await loadSessionFile(path.resolve(file));
@@ -94,12 +110,16 @@ async function main() {
       redactPii: !values['no-redact'],
       mockNetwork: values['no-mock-network'] ? false : undefined,
       freezeTime: !values['no-freeze-time'],
+      storageState: values['storage-state'],
+      keepSecrets: values['keep-secrets'],
       workers: num(values.workers),
+      confirmRuns: num(values.confirm),
       onProgress: (m) => process.stderr.write(`… ${m}\n`),
     });
     if (values.json) return void process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     process.stdout.write(`${r.verdict === 'minimized' ? '✂️ ' : ''}${r.verdict} — ${r.summary}\n`);
     process.stdout.write(`   ${r.rounds} round(s), ${r.testsRun} test run(s), ${(r.durationMs / 1000).toFixed(1)}s\n`);
+    if (r.confirmed) process.stdout.write(`   confirmation: reproduced ${r.confirmed.reproduced}/${r.confirmed.runs}\n`);
     if (r.minimal) {
       process.stdout.write('\nKept:\n');
       for (const d of r.minimal.description) process.stdout.write(`  ${d}\n`);
@@ -114,7 +134,7 @@ async function main() {
       await writeFile(out, r.code, 'utf8');
       process.stderr.write(`wrote ${path.relative(process.cwd(), out)}\n`);
     }
-    if (r.verdict === 'error' || r.verdict === 'not-reproduced') process.exitCode = 1;
+    if (r.verdict === 'error' || r.verdict === 'not-reproduced' || r.verdict === 'flaky') process.exitCode = 1;
     return;
   }
   if (cmd === 'generate') {
@@ -128,6 +148,8 @@ async function main() {
       redactPii: !values['no-redact'],
       mockNetwork: values['no-mock-network'] ? false : undefined,
       freezeTime: !values['no-freeze-time'],
+      storageState: values['storage-state'],
+      keepSecrets: values['keep-secrets'],
     });
     for (const n of result.notes) process.stderr.write(`note: ${n}\n`);
     if (values.out) {
