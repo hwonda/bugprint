@@ -1,5 +1,7 @@
 # bugprint
 
+**English** · [한국어](README.ko.md)
+
 **Turn a recorded user session into a failing test that reproduces the bug.**
 
 bugprint is an MCP server for coding agents. You give it a DOM recording of a real user hitting a bug ([rrweb](https://github.com/rrweb-io/rrweb) events). It returns an end-to-end test that replays what the user did, **with the API responses the user got and at the time they used the app**, and checks that the test **fails the same way**. The agent fixes the code until the test passes, and the test stays as a regression test.
@@ -8,7 +10,13 @@ bugprint is an MCP server for coding agents. You give it a DOM recording of a re
 "Can't reproduce" bug report ──▶ bugprint ──▶ failing e2e test ──▶ reproduced ──▶ minimized to the causal steps ──▶ agent fixes ──▶ passed
 ```
 
-Most session tools stop at _showing_ you the recording, and video-based tools have to _guess_ what happened from pixels. bugprint works from the recorded DOM and network data, so every step resolves to a real element and every response is the one the user actually saw.
+Turning a recording into a test script is the easy part, and existing tools already do it. The hard part is a test that **actually reproduces the bug**:
+
+- **Same environment.** bugprint replays the API responses the user received, sets the clock to the time of the recording, and restores the starting storage.
+- **Same failure.** It runs the test and checks that the test fails with the _same_ error. A test that times out on a changed button doesn't count.
+- **Only what matters.** It shrinks the test to the steps the bug actually needs.
+
+Every locator is checked against the recorded DOM, and a test checks that the real test runner agrees.
 
 ---
 
@@ -18,29 +26,29 @@ The demo shop has a bug that depends on data. On the day of the report, the coup
 
 ```text
 $ bugprint summarize fixtures/checkout-bug.json
-Session ses_300a5a4b · 00:04.2 · 13 steps · 3 page(s)
+Session ses_a0062914 · 00:04.4 · 13 steps · 3 page(s)
 Pages: / → /?q=mouse → /checkout.html
 
 [00:00.0] s1   open /
-[00:00.3] s2   click button "Add to cart" in listitem "Mechanical Keyboard"
-[00:00.8] s3   type "mouse" into field labelled "Search products"
-[00:00.9] s4   press Enter in field labelled "Search products"
-[00:00.9] s5   → navigated to /?q=mouse
-[00:01.1] s6   click button "Add to cart"
-[00:01.4] s7   click link "Go to checkout"
-[00:01.4] s8   → navigated to /checkout.html
-[00:02.3] s9   type "user@example.com" into field labelled "Email"
-[00:02.8] s10  type "save20" into field labelled "Coupon code"
-[00:03.2] s11  click button "Apply"
-[00:03.6] s12  check field labelled "I agree to the terms"
-[00:03.8] s13  click [data-testid="place-order"]
-[00:03.8]   ⚠ uncaught-error: Uncaught (in promise) TypeError: Cannot read properties of null (reading 'rate')  @ HTMLFormElement.<anonymous> (http://localhost:4173/app.js:68:58)
+[00:00.4] s2   click button "Add to cart" in listitem "Mechanical Keyboard"
+[00:01.0] s3   type "mouse" into field labelled "Search products"
+[00:01.0] s4   press Enter in field labelled "Search products"
+[00:01.0] s5   → navigated to /?q=mouse
+[00:01.3] s6   click button "Add to cart"
+[00:01.5] s7   click link "Go to checkout"
+[00:01.5] s8   → navigated to /checkout.html
+[00:02.5] s9   type "user@example.com" into field labelled "Email"
+[00:03.0] s10  type "save20" into field labelled "Coupon code"
+[00:03.4] s11  click button "Apply"
+[00:03.8] s12  check field labelled "I agree to the terms"
+[00:04.1] s13  click [data-testid="place-order"]
+[00:04.1]   ⚠ uncaught-error: Uncaught (in promise) TypeError: Cannot read properties of null (reading 'rate')  @ HTMLFormElement.<anonymous> (http://localhost:4173/app.js:68:58)
 ```
 
 The generated test (abridged):
 
 ```ts
-// @bugprint {"v":1,"session":"ses_300a5a4b","errors":["Uncaught (in promise) TypeError: Cannot read properties of null (reading 'rate')"]}
+// @bugprint {"v":1,"session":"ses_a0062914","errors":["Uncaught (in promise) TypeError: Cannot read properties of null (reading 'rate')"]}
 import { test, expect, type Page } from '@playwright/test';
 
 const BASE_URL = process.env.BUGPRINT_BASE_URL ?? 'http://localhost:4173';
@@ -61,7 +69,7 @@ test("repro: TypeError: Cannot read properties of null (reading 'rate')", async 
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(err.message));
 
-  await page.clock.install({ time: new Date('2026-11-01T13:13:45.390Z') }); // when the session was recorded
+  await page.clock.install({ time: new Date('2026-11-01T13:45:44.920Z') }); // when the session was recorded
   await serveRecordedResponses(page, RECORDED_RESPONSES);
 
   await page.goto(BASE_URL + '/');
@@ -148,15 +156,15 @@ npx bugprint minimize recording.json -o tests/repro/checkout.min.spec.ts --base-
 
 ## Tools
 
-| Tool                | What it does                                                                                                                                                                                                                                                           |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `load_session`      | Load a recording from a path or inline JSON (event array, `{ events }` or NDJSON). Returns a `sessionId`, the pages visited, the API call count, which recorder plugins were present, and any captured errors.                                                         |
-| `summarize_session` | One line per step, with step ids, timestamps and where errors happened. Far cheaper in tokens than raw events.                                                                                                                                                         |
-| `extract_flow`      | Structured steps with the chosen locator and a confidence score for each, plus errors, API calls and warnings.                                                                                                                                                         |
-| `generate_test`     | Writes the reproduction test. You can trim it (`fromMs`/`toMs`, `includeSteps`/`excludeSteps`, `startFrom` a later page), retarget it (`baseUrl`), and switch off `mockNetwork`, `freezeTime` or `restoreStorage`.                                                     |
-| `run_and_verify`    | Runs the test with **your project's own test config** (webServer, baseURL and so on) and returns a verdict, plus the failing step when the test broke somewhere unexpected.                                                                                            |
-| `minimize_repro`    | Finds the shortest test that is still `reproduced`. It first tries opening later pages directly, then removes steps by delta debugging. Each round's candidates run in parallel in one runner invocation, and progress is reported through MCP progress notifications. |
-| `list_sessions`     | Sessions loaded in this server process.                                                                                                                                                                                                                                |
+| Tool                | What it does                                                                                                                                                                                                                                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `load_session`      | Load a recording from a path or inline JSON (event array, `{ events }` or NDJSON). Returns a `sessionId`, the pages visited, the API call count, which recorder plugins were present, and any captured errors.                                                                                                              |
+| `summarize_session` | One line per step, with step ids, timestamps and where errors happened. Far cheaper in tokens than raw events.                                                                                                                                                                                                              |
+| `extract_flow`      | Structured steps with the chosen locator and a confidence score for each, plus errors, API calls and warnings.                                                                                                                                                                                                              |
+| `generate_test`     | Writes the reproduction test. You can trim it (`fromMs`/`toMs`, `includeSteps`/`excludeSteps`, `startFrom` a later page), retarget it (`baseUrl`), log in with your own `storageState`, and switch off `mockNetwork`, `freezeTime`, `restoreStorage` or secret redaction (`keepSecrets`).                                   |
+| `run_and_verify`    | Runs the test with **your project's own test config** (the nearest one above the test file, or `config`) and returns a verdict, plus the failing step when the test broke somewhere unexpected. `expect` adds `ok: true/false` (in the CLI, the exit code).                                                                 |
+| `minimize_repro`    | Finds the shortest test that is still `reproduced`. It first tries opening later pages directly, then removes steps by delta debugging. Each round's candidates run in parallel in one runner invocation, and progress is reported through MCP progress notifications. `confirmRuns` reruns the result to catch flaky bugs. |
+| `list_sessions`     | Sessions loaded in this server process.                                                                                                                                                                                                                                                                                     |
 
 ### Verdicts
 
@@ -196,7 +204,9 @@ record({
 | network (`recordBody: true`) | The test hits your live backend, so bugs that depend on API data may not reproduce.                                   |
 | `bugprint/recorder`          | The starting localStorage and cookies, Enter-to-submit, keyboard shortcuts and client-side route changes are missing. |
 
-`bugprint/recorder` has no dependencies and weighs about 6 KB. When recording starts, it takes a snapshot of localStorage and readable cookies. Keys that look sensitive (`token`, `auth`, `session`, `jwt`, `csrf`, ...) are reported by name only, and their values never leave the browser. You can tune this with `sensitiveKeys`. It and never records ordinary typing (only special keys and Ctrl/Meta/Alt shortcuts). rrweb already records field values and applies its own masking to them.
+`bugprint/recorder` has no dependencies and weighs about 6 KB. When recording starts, it takes a snapshot of localStorage and readable cookies. Sensitive keys (`accessToken`, `sessionId`, `apiKey`, `password`, `csrf`, ...) are reported by name only, and their values never leave the browser. Keys are judged by their words, so `author` is not caught by `auth`. Add your own with `sensitiveKeys`.
+
+The plugin never records ordinary typing, only special keys and Ctrl/Meta/Alt shortcuts. rrweb already records field values and applies its own masking to them.
 
 ---
 
@@ -238,7 +248,11 @@ Design decisions:
 - **Errors are matched on what the page actually threw.** Verification compares the recorded error with the errors the test captured, which the test reports through an annotation, and never with the raw failure text. An early version did compare raw text, and minimization caught it: the failure message includes a code frame, and the code frame quoted the recorded error from a comment. So an unrelated 404 counted as a reproduction. A regression test now covers this.
 - **Minimization is batched.** Delta debugging means many test runs. Each round writes all its candidates as separate files and runs them in a single invocation with parallel workers, so the app server starts once per round, not once per candidate.
 - **Output is sized for agents.** `summarize_session` returns a short timeline. Step ids let the agent cut a test down without re-reading the recording, and `failedStep` points at the exact line that broke.
-- **Privacy comes first.** Typed e-mails, phone numbers and card numbers are swapped for fakes of the same shape. In recorded responses only e-mail addresses inside string values are replaced, so ids that later requests depend on stay intact. Masked passwords become `process.env.BUGPRINT_SECRET_n`.
+- **Privacy and secrets come first.** Generated tests usually end up in git.
+  - Typed e-mails, phone numbers and card numbers are swapped for fakes of the same shape.
+  - Tokens (JWT, Bearer, common API key formats) and values under sensitive keys are redacted from responses and storage. Ids and numbers stay intact, so later requests still line up.
+  - Masked passwords become `process.env.BUGPRINT_SECRET_n`.
+- **Validated against the real runner and a real agent.** See [docs/validation.md](docs/validation.md). Generated locators are resolved by the real test runner in a test, a 20,000-node page takes about 54 ms per click, and the minimum runner version was checked. A headless coding agent fixed the demo bug on its own using only these tools, in 17 turns. Each of these checks found and fixed a real bug.
 
 ---
 
@@ -257,13 +271,21 @@ To record your own session of the demo shop, run `npm run build && npm run demo:
 
 ---
 
+## Compatibility
+
+- Node.js 20 or later.
+- `@playwright/test` 1.45 or later, in your project. The generated tests use `page.clock`, which arrived in 1.45. Old runner releases can hang on newer Node versions (1.45 on Node 24 does), and `verify` tells you when that seems to be the case.
+- CI runs on Linux, macOS and Windows with Node 20 and 24.
+
+---
+
 ## Limitations and roadmap
 
-- Sensitive storage (auth tokens, session cookies) and HttpOnly cookies are never recorded. If the bug needs a logged-in user, pass your own `storageState`.
+- Sensitive storage (auth tokens, session cookies) and HttpOnly cookies are never recorded. If the bug needs a logged-in user, pass your own `storageState` file.
 - Only the main frame is handled. iframes and multiple tabs are not.
 - WebSocket and server-sent event traffic is not replayed.
 - Export formats from hosted session-recording services are detected generically: rrweb events are found at any nesting depth, and segments are merged. This has not been checked against real exports from specific vendors yet.
-- Minimization assumes the bug is deterministic. With the recorded responses and a fixed clock, it usually is.
+- Minimization assumes the bug is deterministic. With the recorded responses and a fixed clock, it usually is. Use `--confirm <n>` to check.
 
 Next (v1.0): npm release, MCP Registry listing, a demo video, and a case study on a real open-source app.
 
@@ -272,11 +294,14 @@ Next (v1.0): npm release, MCP Registry listing, a demo video, and a case study o
 ## Development
 
 ```bash
-npm test            # unit, MCP integration and real-browser verify tests (vitest)
-npm run typecheck
+npm run check       # lint (oxlint) + format (Prettier) + types + all tests
+npm test            # unit, MCP integration and real-browser tests (vitest)
+npm run bench       # large-page benchmark
 npm run build
 npm run inspect     # open the MCP Inspector against dist/
 ```
+
+Release steps that need your accounts are listed in [docs/release-checklist.md](docs/release-checklist.md). Changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
