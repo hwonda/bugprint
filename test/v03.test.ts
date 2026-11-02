@@ -111,3 +111,13 @@ describe('helpers', () => {
     expect(stripCodeFrame(msg)).toBe(['Error: boom', '+   "Failed to load resource"', 'at x.ts:34'].join('\n'));
   });
 });
+
+describe('assertion order', () => {
+  it('checks recorded errors before the expected text, so a crash is not hidden by a timeout', () => {
+    const root = doc(h('button', { k: 'b' }, 'Pay'));
+    const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'b').id).error('Uncaught TypeError: boom');
+    const code = generateTest(flowOf(r), { expectVisibleText: 'Paid' }).code;
+    expect(code.indexOf('toEqual([])')).toBeGreaterThan(0);
+    expect(code.indexOf("getByText('Paid')")).toBeGreaterThan(code.indexOf('toEqual([])'));
+  });
+});

@@ -13,6 +13,8 @@ export type Query =
 export interface LocatorPart {
   query: Query;
   hasText?: string;
+  /** Keep only elements that contain a descendant matching this query (`filter({ has })`). */
+  has?: Query;
 }
 
 export interface Locator {
@@ -77,11 +79,12 @@ function matchesCss(dom: VirtualDom, n: VNode, selector: string): boolean {
   return cssPath(dom, n) === selector;
 }
 
-function findAll(dom: VirtualDom, q: Query, scope?: VNode, hasText?: string): VNode[] {
+function findAll(dom: VirtualDom, q: Query, scope?: VNode, hasText?: string, has?: Query): VNode[] {
   const out: VNode[] = [];
   for (const el of dom.elements(scope)) {
     if (!matches(dom, el, q)) continue;
     if (hasText && !ci(dom.textContent(el)).includes(ci(hasText))) continue;
+    if (has && !findAll(dom, has, el).length) continue;
     out.push(el);
   }
   return out;
@@ -92,7 +95,7 @@ export function resolve(dom: VirtualDom, loc: Pick<Locator, 'chain' | 'nth'>): V
   let scopes: (VNode | undefined)[] = [undefined];
   for (const part of loc.chain) {
     const next: VNode[] = [];
-    for (const s of scopes) next.push(...findAll(dom, part.query, s, part.hasText));
+    for (const s of scopes) next.push(...findAll(dom, part.query, s, part.hasText, part.has));
     scopes = [...new Set(next)];
   }
   const found = scopes.filter((x): x is VNode => Boolean(x));
@@ -169,8 +172,21 @@ function containerParts(dom: VirtualDom, a: VNode, target: VNode): LocatorPart[]
     if (name && name.length <= 60 && role !== 'listitem' && role !== 'cell') parts.push({ query: { by: 'role', role, name } });
     const text = distinguishingText(dom, a, target);
     if (text) parts.push({ query: { by: 'role', role }, hasText: text });
+    // Substring matching makes "Product 1" also match "Product 10"; an exact heading does not.
+    const heading = firstHeading(dom, a);
+    if (heading) parts.push({ query: { by: 'role', role }, has: { by: 'role', role: 'heading', name: heading, exact: true } });
   }
   return parts;
+}
+
+function firstHeading(dom: VirtualDom, container: VNode): string | null {
+  for (const d of dom.descendants(container)) {
+    if (d.type === NodeType.Element && roleOf(d) === 'heading' && !isHidden(dom, d)) {
+      const name = accessibleName(dom, d);
+      if (name && name.length <= 80) return name;
+    }
+  }
+  return null;
 }
 
 export function buildLocator(dom: VirtualDom, node: VNode): Locator {
@@ -230,7 +246,9 @@ export function describeQuery(q: Query): string {
 }
 
 function describe(chain: LocatorPart[], nth?: number): string {
-  const parts = chain.map((p) => describeQuery(p.query) + (p.hasText ? ` "${p.hasText}"` : ''));
+  const parts = chain.map(
+    (p) => describeQuery(p.query) + (p.hasText ? ` "${p.hasText}"` : '') + (p.has ? ` with ${describeQuery(p.has)}` : ''),
+  );
   const inner = parts.pop()!;
   const base = parts.length ? `${inner} in ${parts.reverse().join(' in ')}` : inner;
   return nth !== undefined ? `${base} (#${nth + 1})` : base;
@@ -269,6 +287,7 @@ export function renderLocator(loc: Pick<Locator, 'chain' | 'nth'>, root = 'page'
   for (const p of loc.chain) {
     out += `.${renderQuery(p.query)}`;
     if (p.hasText) out += `.filter({ hasText: ${str(p.hasText)} })`;
+    if (p.has) out += `.filter({ has: ${root}.${renderQuery(p.has)} })`;
   }
   if (loc.nth !== undefined) out += loc.nth === 0 ? '.first()' : `.nth(${loc.nth})`;
   return out;

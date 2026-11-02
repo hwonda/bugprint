@@ -154,7 +154,7 @@ function labelOwnText(dom: VirtualDom, label: VNode, control: VNode): string {
     const child = dom.get(c);
     if (!child || child.id === control.id) continue;
     if (child.type === 3) pieces.push(child.text);
-    else if (child.type === 2 && !['input', 'select', 'textarea'].includes(child.tagName)) pieces.push(dom.textContent(child));
+    else if (child.type === 2 && !['input', 'select', 'textarea'].includes(child.tagName)) pieces.push(nameFromContent(dom, child));
   }
   return collapse(pieces.join(' '));
 }
@@ -166,7 +166,7 @@ export function accessibleName(dom: VirtualDom, n: VNode): string {
       .split(/\s+/)
       .map((id) => dom.byId(id))
       .filter((x): x is VNode => Boolean(x))
-      .map((x) => dom.textContent(x))
+      .map((x) => nameFromContent(dom, x))
       .join(' ');
     if (collapse(text)) return collapse(text);
   }
@@ -188,7 +188,7 @@ export function accessibleName(dom: VirtualDom, n: VNode): string {
 
   const role = roleOf(n);
   if (role && NAME_FROM_CONTENT.has(role)) {
-    const text = dom.textContent(n);
+    const text = nameFromContent(dom, n);
     if (text) return text;
   }
   if (n.attributes.title) return collapse(n.attributes.title);
@@ -239,4 +239,44 @@ export function interactiveTarget(dom: VirtualDom, n: VNode): VNode {
     depth++;
   }
   return n;
+}
+
+/**
+ * Elements browsers render as blocks / table cells. When an accessible name is computed
+ * from content, their text is separated by spaces ("Alice" + "Edit" → "Alice Edit"),
+ * unlike textContent, which `getByText` / `hasText` use.
+ */
+const BLOCK = new Set([
+  'address', 'article', 'aside', 'blockquote', 'br', 'dd', 'details', 'dialog', 'div', 'dl', 'dt', 'fieldset', 'figcaption',
+  'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre',
+  'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul', 'caption', 'option',
+]);
+
+export function nameFromContent(dom: VirtualDom, n: VNode): string {
+  const parts: string[] = [];
+  const walk = (cur: VNode) => {
+    if (cur.type === 3) {
+      if (!cur.isStyle) parts.push(cur.text);
+      return;
+    }
+    if (cur.type !== 2 && cur.type !== 0) return;
+    if (isNonRendered(cur)) return;
+    const block = BLOCK.has(cur.tagName);
+    if (block) parts.push(' ');
+    if (cur.attributes['aria-label'] && cur !== n) {
+      parts.push(` ${cur.attributes['aria-label']} `);
+    } else if (cur.tagName === 'img') {
+      if (cur.attributes.alt) parts.push(` ${cur.attributes.alt} `);
+    } else if (cur.tagName === 'input' && cur !== n) {
+      parts.push(` ${cur.attributes.value ?? ''} `);
+    } else {
+      for (const c of cur.children) {
+        const child = dom.get(c);
+        if (child) walk(child);
+      }
+    }
+    if (block) parts.push(' ');
+  };
+  walk(n);
+  return collapse(parts.join(''));
 }

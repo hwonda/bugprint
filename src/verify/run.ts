@@ -144,7 +144,17 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
         ...(opts.baseUrl ? { BUGPRINT_BASE_URL: opts.baseUrl } : {}),
       },
     });
-    if (run.timedOut) return all('error', `The run exceeded ${Math.round(timeoutMs / 1000)}s and was stopped.`);
+    if (run.timedOut) {
+      const silent = !run.stdout.trim() && !run.stderr.trim();
+      return all(
+        'error',
+        `The run exceeded ${Math.round(timeoutMs / 1000)}s and was stopped.` +
+          (silent
+            ? ' The runner printed nothing at all, so it probably never started: old runner releases can hang on newer Node versions (seen with 1.45 on Node 24). Try a newer @playwright/test or an older Node.'
+            : ''),
+        tail(run.stderr || run.stdout),
+      );
+    }
     let report: Report;
     try {
       report = JSON.parse(await readFile(reportFile, 'utf8'));

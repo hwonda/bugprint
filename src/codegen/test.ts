@@ -247,9 +247,6 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   const settle = Math.min(3000, Math.max(300, Math.round(lag + 250)));
 
   const tail: string[] = [];
-  if (opts.expectVisibleText) {
-    tail.push(`  await expect(page.getByText(${str(opts.expectVisibleText)})).toBeVisible();`);
-  }
   if (assertNoErrors) {
     tail.push(`  await page.waitForTimeout(${settle});`);
     if (relevant.length) {
@@ -261,6 +258,11 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     }
     tail.push(`  test.info().annotations.push({ type: ${str(ERRORS_ANNOTATION)}, description: JSON.stringify(errors) });`);
     tail.push("  expect(errors, 'the page should not throw while replaying the recorded steps').toEqual([]);");
+  }
+  // After the error check: if the page crashed, the expected text never shows up, and a
+  // timeout there would hide the real failure (found by running an agent against bugprint).
+  if (opts.expectVisibleText) {
+    tail.push(`  await expect(page.getByText(${str(opts.expectVisibleText)})).toBeVisible();`);
   }
   if (!tail.length) {
     tail.push('  // TODO: no error was recorded. Assert the expected behaviour here, e.g.:');
