@@ -85,7 +85,12 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
       const files: string[] = [];
       for (const [i, c] of fresh.entries()) {
         const file = path.join(dir, `c${i}.spec.ts`);
-        const { code } = generateTest(flow, { ...genOpts, startFrom: c.startFrom ?? undefined, includeSteps: c.include, testName: `candidate ${i}` });
+        const { code } = generateTest(flow, {
+          ...genOpts,
+          startFrom: c.startFrom ?? undefined,
+          includeSteps: c.include,
+          testName: `candidate ${i}`,
+        });
         await writeFile(file, code);
         files.push(file);
       }
@@ -104,7 +109,12 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
     const baselineCand: Candidate = { startFrom: null, include: all.map((s) => s.id) };
     const [baseline] = await run([baselineCand], 'baseline: the full test');
     if (!baseline || !ok(baseline)) {
-      return done(baseline?.verdict === 'error' ? 'error' : 'not-reproduced', `The full test does not reproduce the bug (verdict: ${baseline?.verdict}). Fix that first with run_and_verify.`, baseline!, null);
+      return done(
+        baseline?.verdict === 'error' ? 'error' : 'not-reproduced',
+        `The full test does not reproduce the bug (verdict: ${baseline?.verdict}). Fix that first with run_and_verify.`,
+        baseline!,
+        null,
+      );
     }
 
     // ---- 2. latest start page that still reproduces ------------------------------
@@ -122,7 +132,10 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
         }
       }
     }
-    const make = (subset: string[]): Candidate => ({ startFrom, include: startFrom ? subset : [...(pinnedFirst ? [pinnedFirst] : []), ...subset] });
+    const make = (subset: string[]): Candidate => ({
+      startFrom,
+      include: startFrom ? subset : [...(pinnedFirst ? [pinnedFirst] : []), ...subset],
+    });
 
     // ---- 3. ddmin over the remaining steps ---------------------------------------
     let c = rest;
@@ -136,7 +149,10 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
       const complements = n > 2 ? chunks.map((ch) => c.filter((x) => !ch.includes(x))) : [];
       const cands = [...chunks, ...complements].map(make);
       const results = await run(cands, `ddmin: ${c.length} steps in ${n} chunks`);
-      const subIdx = chunks.map((_, i) => i).filter((i) => ok(results[i]!)).sort((a, b) => chunks[a]!.length - chunks[b]!.length)[0];
+      const subIdx = chunks
+        .map((_, i) => i)
+        .filter((i) => ok(results[i]!))
+        .sort((a, b) => chunks[a]!.length - chunks[b]!.length)[0];
       if (subIdx !== undefined) {
         c = chunks[subIdx]!;
         n = 2;
@@ -226,7 +242,18 @@ export async function minimizeRepro(flow: Flow, opts: MinimizeOptions = {}): Pro
     removed: string[] = [],
     code: string | null = null,
   ): MinimizeResult {
-    return { verdict, summary, baseline, original: { steps: flow.steps.length }, minimal, removed, rounds, testsRun, durationMs: Date.now() - started, code };
+    return {
+      verdict,
+      summary,
+      baseline,
+      original: { steps: flow.steps.length },
+      minimal,
+      removed,
+      rounds,
+      testsRun,
+      durationMs: Date.now() - started,
+      code,
+    };
   }
 }
 

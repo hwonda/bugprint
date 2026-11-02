@@ -25,7 +25,14 @@ function journey() {
 describe('selectSteps', () => {
   it('startFrom opens that page directly and drops earlier steps', () => {
     const flow = journey();
-    expect(flow.steps.map((s) => `${s.id}:${s.kind}`)).toEqual(['s1:goto', 's2:click', 's3:expectUrl', 's4:click', 's5:expectUrl', 's6:click']);
+    expect(flow.steps.map((s) => `${s.id}:${s.kind}`)).toEqual([
+      's1:goto',
+      's2:click',
+      's3:expectUrl',
+      's4:click',
+      's5:expectUrl',
+      's6:click',
+    ]);
     const steps = selectSteps(flow, { startFrom: 's5' });
     expect(steps.map((s) => `${s.id}:${s.kind}`)).toEqual(['s5:goto', 's6:click']);
     expect(generateTest(flow, { startFrom: 's5', freezeTime: false }).code).toContain("await page.goto(BASE_URL + '/c');");
@@ -52,7 +59,11 @@ describe('initial storage', () => {
   }
 
   it('restores the first snapshot as storageState, redacting e-mails', () => {
-    const flow = withStorage({ localStorage: { cart: '["kb"]', profile: '{"email":"jane@corp.io"}' }, cookies: { theme: 'dark' }, masked: ['authToken'] });
+    const flow = withStorage({
+      localStorage: { cart: '["kb"]', profile: '{"email":"jane@corp.io"}' },
+      cookies: { theme: 'dark' },
+      masked: ['authToken'],
+    });
     expect(flow.initialStorage?.localStorage).toEqual({ cart: '["kb"]', profile: '{"email":"jane@corp.io"}' });
     const t = generateTest(flow);
     expect(t.code).toContain('test.use({');
@@ -66,7 +77,9 @@ describe('initial storage', () => {
 
   it('emits nothing when storage was empty or restoreStorage is off', () => {
     expect(generateTest(withStorage({ localStorage: {}, cookies: {}, masked: [] })).code).not.toContain('storageState');
-    expect(generateTest(withStorage({ localStorage: { a: '1' }, cookies: {}, masked: [] }), { restoreStorage: false }).code).not.toContain('storageState');
+    expect(generateTest(withStorage({ localStorage: { a: '1' }, cookies: {}, masked: [] }), { restoreStorage: false }).code).not.toContain(
+      'storageState',
+    );
   });
 });
 
@@ -75,7 +88,18 @@ describe('external fixtures', () => {
     const root = doc(h('button', { k: 'b' }, 'Load'));
     const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'b').id);
     const big = JSON.stringify({ rows: Array.from({ length: 3000 }, (_, i) => ({ i, name: `row ${i}` })) });
-    plugin(r, 'rrweb/network@1', { requests: [{ name: 'https://app.test/api/rows', method: 'GET', initiatorType: 'fetch', status: 200, responseHeaders: { 'content-type': 'application/json' }, responseBody: big }] });
+    plugin(r, 'rrweb/network@1', {
+      requests: [
+        {
+          name: 'https://app.test/api/rows',
+          method: 'GET',
+          initiatorType: 'fetch',
+          status: 200,
+          responseHeaders: { 'content-type': 'application/json' },
+          responseBody: big,
+        },
+      ],
+    });
     const flow = flowOf(r);
     const inline = generateTest(flow);
     expect(inline.files).toEqual([]);
@@ -102,12 +126,22 @@ describe('export formats', () => {
 
 describe('helpers', () => {
   it('split chunks evenly and in order', () => {
-    expect(split([1, 2, 3, 4, 5], 2)).toEqual([[1, 2, 3], [4, 5]]);
+    expect(split([1, 2, 3, 4, 5], 2)).toEqual([
+      [1, 2, 3],
+      [4, 5],
+    ]);
     expect(split([1, 2, 3], 3)).toEqual([[1], [2], [3]]);
   });
 
   it('stripCodeFrame drops source excerpts from failure messages', () => {
-    const msg = ['Error: boom', '+   "Failed to load resource"', "  32 |   //   TypeError: reading 'rate'", '> 34 |   expect(errors)', '     |   ^', 'at x.ts:34'].join('\n');
+    const msg = [
+      'Error: boom',
+      '+   "Failed to load resource"',
+      "  32 |   //   TypeError: reading 'rate'",
+      '> 34 |   expect(errors)',
+      '     |   ^',
+      'at x.ts:34',
+    ].join('\n');
     expect(stripCodeFrame(msg)).toBe(['Error: boom', '+   "Failed to load resource"', 'at x.ts:34'].join('\n'));
   });
 });
@@ -115,7 +149,10 @@ describe('helpers', () => {
 describe('assertion order', () => {
   it('checks recorded errors before the expected text, so a crash is not hidden by a timeout', () => {
     const root = doc(h('button', { k: 'b' }, 'Pay'));
-    const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'b').id).error('Uncaught TypeError: boom');
+    const r = new Rec()
+      .page('https://app.test/', root)
+      .click(byAttr(root, 'k', 'b').id)
+      .error('Uncaught TypeError: boom');
     const code = generateTest(flowOf(r), { expectVisibleText: 'Paid' }).code;
     expect(code.indexOf('toEqual([])')).toBeGreaterThan(0);
     expect(code.indexOf("getByText('Paid')")).toBeGreaterThan(code.indexOf('toEqual([])'));

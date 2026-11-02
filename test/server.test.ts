@@ -25,7 +25,15 @@ describe('MCP server (real recording)', () => {
   it('exposes the tools and the reproduce_bug prompt', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['extract_flow', 'generate_test', 'list_sessions', 'load_session', 'minimize_repro', 'run_and_verify', 'summarize_session']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'extract_flow',
+      'generate_test',
+      'list_sessions',
+      'load_session',
+      'minimize_repro',
+      'run_and_verify',
+      'summarize_session',
+    ]);
     const { prompts } = await client.listPrompts();
     expect(prompts.map((p) => p.name)).toEqual(['reproduce_bug']);
   });
@@ -65,7 +73,10 @@ describe('MCP server (real recording)', () => {
     const dir = await mkdtemp(path.join(path.resolve(__dirname, '..'), 'test', '.tmp-mcp-'));
     const out = path.join(dir, 'min.spec.ts');
     const res = (await client.callTool(
-      { name: 'minimize_repro', arguments: { sessionId: loaded.sessionId, baseUrl: 'http://localhost:4173', outputPath: out, cwd: path.resolve(__dirname, '..') } },
+      {
+        name: 'minimize_repro',
+        arguments: { sessionId: loaded.sessionId, baseUrl: 'http://localhost:4173', outputPath: out, cwd: path.resolve(__dirname, '..') },
+      },
       undefined,
       { onprogress: (p) => progress.push(String(p.message)), timeout: 240_000 },
     )) as { content: { text: string }[] };

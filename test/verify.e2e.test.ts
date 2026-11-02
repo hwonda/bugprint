@@ -29,7 +29,9 @@ describe('verifyTest (real browser)', () => {
 
   it('reports "failed-differently" with the failing step when a locator no longer matches', async () => {
     const file = await writeRepro('broken', (c) =>
-      c.replace("{ name: 'Apply' }", "{ name: 'Redeem' }").replace('  const errors: string[] = [];', '  test.setTimeout(8000);\n  const errors: string[] = [];'),
+      c
+        .replace("{ name: 'Apply' }", "{ name: 'Redeem' }")
+        .replace('  const errors: string[] = [];', '  test.setTimeout(8000);\n  const errors: string[] = [];'),
     );
     const r = await verifyTest(file, { cwd: root });
     expect(r.verdict, r.error).toBe('failed-differently');
@@ -63,7 +65,8 @@ describe('verifyTest (real browser)', () => {
     expect(r).toMatchObject({ verdict: 'reproduced', ok: false });
     const { spawnSync } = await import('node:child_process');
     const cli = (expectArg: string) =>
-      spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'verify', file, '--expect', expectArg], { cwd: root, encoding: 'utf8' }).status;
+      spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'verify', file, '--expect', expectArg], { cwd: root, encoding: 'utf8' })
+        .status;
     expect(cli('reproduced')).toBe(0);
     expect(cli('passed')).toBe(1);
   }, 120_000);
@@ -72,10 +75,19 @@ describe('verifyTest (real browser)', () => {
     const state = path.join(root, 'test', '.tmp', 'state.json');
     await writeFile(
       state,
-      JSON.stringify({ cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'cart', value: '["kb","kb"]' }] }] }),
+      JSON.stringify({
+        cookies: [],
+        origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'cart', value: '["kb","kb"]' }] }],
+      }),
     );
     // Open checkout directly: the total can only be $240 if the storage state was loaded.
-    const file = await writeRepro('state', undefined, { startFrom: 's8', includeSteps: [], expectVisibleText: '$240', assertNoErrors: false, storageState: state });
+    const file = await writeRepro('state', undefined, {
+      startFrom: 's8',
+      includeSteps: [],
+      expectVisibleText: '$240',
+      assertNoErrors: false,
+      storageState: state,
+    });
     const r = await verifyTest(file, { cwd: root });
     expect(r.verdict, r.error).toBe('passed');
   }, 90_000);

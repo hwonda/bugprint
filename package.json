@@ -1,7 +1,7 @@
 {
   "name": "bugprint",
   "version": "0.3.0",
-  "description": "MCP server that turns recorded user sessions (rrweb) into failing, reproducible end-to-end tests.",
+  "description": "MCP server that turns recorded user sessions (rrweb) into failing reproduction tests, verifies they fail the same way, and shrinks them to the essential steps.",
   "type": "module",
   "bin": {
     "bugprint": "dist/cli.js"
@@ -25,18 +25,27 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/cli.js",
     "demo": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout.spec.ts --base-url http://localhost:4173 && node dist/cli.js verify tests/repro/checkout.spec.ts",
     "demo:fixed": "DEMO_FIXED=1 node dist/cli.js verify tests/repro/checkout.spec.ts",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run check && npm run build",
     "demo:live": "npm run build && node dist/cli.js generate fixtures/checkout-bug.json -o tests/repro/checkout-live.spec.ts --base-url http://localhost:4173 --no-mock-network && node dist/cli.js verify tests/repro/checkout-live.spec.ts",
     "demo:minimize": "npm run build && node dist/cli.js minimize fixtures/checkout-bug.json --base-url http://localhost:4173 -o tests/repro/checkout.min.spec.ts",
-    "bench": "tsx bench/large-page.ts 100 600 2000"
+    "bench": "tsx bench/large-page.ts 100 600 2000",
+    "lint": "oxlint --deny-warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test"
   },
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
     "rrweb",
-    "e2e",
+    "session-replay",
     "bug-reproduction",
-    "testing"
+    "e2e",
+    "playwright",
+    "test-generation",
+    "delta-debugging",
+    "ai-agents"
   ],
   "license": "MIT",
   "engines": {
@@ -51,6 +60,8 @@
     "@rrweb/rrweb-plugin-console-record": "^2.2.0",
     "@rrweb/rrweb-plugin-network-record": "^2.2.0",
     "@types/node": "^26.6.6",
+    "oxlint": "^1.90.0",
+    "prettier": "^3.9.10",
     "rrweb": "^2.2.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
@@ -66,5 +77,13 @@
       "default": "./dist/recorder/plugin.js"
     },
     "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.45.0"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    }
   }
 }

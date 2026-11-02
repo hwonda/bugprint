@@ -18,7 +18,7 @@ export class SessionStore {
 
   private add(s: Session): Session {
     this.sessions.set(s.id, s);
-    for (const k of [...this.flows.keys()]) if (k.startsWith(`${s.id}:`)) this.flows.delete(k);
+    for (const k of this.flows.keys()) if (k.startsWith(`${s.id}:`)) this.flows.delete(k);
     return s;
   }
 

@@ -35,8 +35,36 @@ export interface BugprintRecordOptions {
 
 // Must match isSensitiveKey() in src/codegen/secrets.ts (a test checks they agree).
 // Duplicated because this file is shipped to browsers on its own, without imports.
-const WORDS = ['token', 'tokens', 'secret', 'secrets', 'password', 'passwd', 'pwd', 'jwt', 'credential', 'credentials', 'csrf', 'xsrf', 'sid', 'apikey', 'cookie', 'cookies', 'otp', 'pin', 'ssn'];
-const PAIRS = [['api', 'key'], ['private', 'key'], ['access', 'key'], ['secret', 'key'], ['session', 'id'], ['session', 'key'], ['client', 'secret']];
+const WORDS = [
+  'token',
+  'tokens',
+  'secret',
+  'secrets',
+  'password',
+  'passwd',
+  'pwd',
+  'jwt',
+  'credential',
+  'credentials',
+  'csrf',
+  'xsrf',
+  'sid',
+  'apikey',
+  'cookie',
+  'cookies',
+  'otp',
+  'pin',
+  'ssn',
+];
+const PAIRS = [
+  ['api', 'key'],
+  ['private', 'key'],
+  ['access', 'key'],
+  ['secret', 'key'],
+  ['session', 'id'],
+  ['session', 'key'],
+  ['client', 'secret'],
+];
 const WHOLE = ['auth', 'authorization', 'session', 'bearer', 'signature'];
 
 export function isSensitiveKey(key: string): boolean {

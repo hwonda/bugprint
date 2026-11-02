@@ -15,7 +15,12 @@ const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const json = (v: unknown) => text(JSON.stringify(v, null, 2));
 
 const windowShape = {
-  fromMs: z.number().int().nonnegative().optional().describe('Start of the window, ms since recording start (see timestamps in summarize_session).'),
+  fromMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('Start of the window, ms since recording start (see timestamps in summarize_session).'),
   toMs: z.number().int().nonnegative().optional().describe('End of the window, ms since recording start.'),
 };
 
@@ -74,7 +79,12 @@ export function createServer(store = new SessionStore()): McpServer {
       if (!p && !raw) throw new Error('Provide either "path" or "json".');
       const session = p ? await store.loadFromPath(p) : store.loadFromData(raw);
       const flow = store.flow(session.id);
-      return json({ ...overview(flow), eventCount: session.events.length, warnings: flow.warnings, next: 'summarize_session or generate_test' });
+      return json({
+        ...overview(flow),
+        eventCount: session.events.length,
+        warnings: flow.warnings,
+        next: 'summarize_session or generate_test',
+      });
     },
   );
 
@@ -105,7 +115,13 @@ export function createServer(store = new SessionStore()): McpServer {
         ...overview(flow),
         steps: flow.steps.map(compactStep),
         signals: flow.signals.map((s) => ({ ...s, at: fmtTime(s.t), url: pathOf(s.url) })),
-        network: flow.network.map((c) => ({ at: fmtTime(c.t), method: c.method, url: pathOf(c.url), status: c.status, hasBody: c.responseBody !== null })),
+        network: flow.network.map((c) => ({
+          at: fmtTime(c.t),
+          method: c.method,
+          url: pathOf(c.url),
+          status: c.status,
+          hasBody: c.responseBody !== null,
+        })),
         warnings: flow.warnings,
       });
     },
@@ -125,14 +141,26 @@ export function createServer(store = new SessionStore()): McpServer {
         excludeSteps: z.array(z.string()).optional().describe('Drop these step ids.'),
         baseUrl: z.string().url().optional().describe('Run against this origin instead of the recorded one, e.g. http://localhost:3000.'),
         testName: z.string().optional(),
-        expectVisibleText: z.string().optional().describe('Also assert this text becomes visible (the expected outcome when the bug is fixed).'),
-        assertNoErrors: z.boolean().optional().describe('Fail on page errors / console.error. Defaults to true when the session captured an error.'),
+        expectVisibleText: z
+          .string()
+          .optional()
+          .describe('Also assert this text becomes visible (the expected outcome when the bug is fixed).'),
+        assertNoErrors: z
+          .boolean()
+          .optional()
+          .describe('Fail on page errors / console.error. Defaults to true when the session captured an error.'),
         redactPii: z.boolean().optional().describe('Replace e-mails, phone and card numbers with fakes. Default true.'),
-        mockNetwork: z.boolean().optional().describe('Serve the recorded API responses instead of the live backend. Default true when the recording has them.'),
+        mockNetwork: z
+          .boolean()
+          .optional()
+          .describe('Serve the recorded API responses instead of the live backend. Default true when the recording has them.'),
         freezeTime: z.boolean().optional().describe('Start the browser clock at the recording time. Default true.'),
         startFrom: z.string().optional().describe('Start at this navigation step id (opens its URL directly and skips earlier steps).'),
         restoreStorage: z.boolean().optional().describe('Restore localStorage/cookies captured when the recording started. Default true.'),
-        storageState: z.string().optional().describe('Storage state file for a logged-in user (cookies + localStorage). Recorded localStorage is layered on top.'),
+        storageState: z
+          .string()
+          .optional()
+          .describe('Storage state file for a logged-in user (cookies + localStorage). Recorded localStorage is layered on top.'),
         keepSecrets: z.boolean().optional().describe('Keep tokens/API keys in recorded responses and storage. Default false.'),
         outputPath: z.string().optional().describe('Write the test here (e.g. tests/repro/checkout.spec.ts).'),
         overwrite: z.boolean().optional().describe('Allow replacing an existing file at outputPath.'),
@@ -153,7 +181,8 @@ export function createServer(store = new SessionStore()): McpServer {
       if (written) notes.push(`Written to ${written}. Run it with: npx playwright test ${path.relative(process.cwd(), written)}`);
       if (result.secrets.length) notes.push(`Set ${result.secrets.join(', ')} (values were masked in the recording).`);
       if (result.mockedResponses) notes.push(`${result.mockedResponses} recorded API response(s) are served by the test.`);
-      if (!result.recordedErrors.length) notes.push('No error was recorded in the selected steps: add an assertion describing the bug (or pass expectVisibleText).');
+      if (!result.recordedErrors.length)
+        notes.push('No error was recorded in the selected steps: add an assertion describing the bug (or pass expectVisibleText).');
       notes.push(...result.notes, ...flow.warnings.filter((w) => !w.startsWith('No error')));
       if (written) notes.push('Next: run_and_verify with this testPath.');
       return text(`${notes.map((n) => `// ${n}`).join('\n')}\n\n${result.code}`);
@@ -202,7 +231,13 @@ export function createServer(store = new SessionStore()): McpServer {
         cwd: z.string().optional().describe('Project root containing the test runner config.'),
         workers: z.number().int().positive().optional().describe('Parallel workers per round. Default 4.'),
         maxRounds: z.number().int().positive().optional().describe('Upper bound on test-runner invocations. Default 12.'),
-        confirmRuns: z.number().int().positive().max(20).optional().describe('Rerun the minimal test this many times; accept only if all reproduce. Default 1.'),
+        confirmRuns: z
+          .number()
+          .int()
+          .positive()
+          .max(20)
+          .optional()
+          .describe('Rerun the minimal test this many times; accept only if all reproduce. Default 1.'),
         storageState: z.string().optional(),
         keepSecrets: z.boolean().optional(),
         mockNetwork: z.boolean().optional(),
@@ -218,7 +253,10 @@ export function createServer(store = new SessionStore()): McpServer {
         ...args,
         onProgress: (message, round) => {
           if (token === undefined) return;
-          void extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: round, total: args.maxRounds ?? 12, message } });
+          void extra.sendNotification({
+            method: 'notifications/progress',
+            params: { progressToken: token, progress: round, total: args.maxRounds ?? 12, message },
+          });
         },
       });
       let written: string | undefined;
@@ -236,7 +274,12 @@ export function createServer(store = new SessionStore()): McpServer {
         written = abs;
       }
       const { code, baseline, ...rest } = result;
-      return json({ ...rest, baseline: { verdict: baseline.verdict, summary: baseline.summary }, written, code: written ? undefined : code });
+      return json({
+        ...rest,
+        baseline: { verdict: baseline.verdict, summary: baseline.summary },
+        written,
+        code: written ? undefined : code,
+      });
     },
   );
 
@@ -248,7 +291,8 @@ export function createServer(store = new SessionStore()): McpServer {
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => json(store.list().map((s) => ({ sessionId: s.id, source: s.source, events: s.events.length, duration: fmtTime(s.durationMs) }))),
+    async () =>
+      json(store.list().map((s) => ({ sessionId: s.id, source: s.source, events: s.events.length, duration: fmtTime(s.durationMs) }))),
   );
 
   server.registerPrompt(
@@ -286,7 +330,10 @@ export function createServer(store = new SessionStore()): McpServer {
 }
 
 function fixturesName(testFile: string): string {
-  return `${path.basename(testFile).replace(/\.(spec|test)\.[cm]?[jt]s$/, '').replace(/\.[cm]?[jt]s$/, '')}.responses.json`;
+  return `${path
+    .basename(testFile)
+    .replace(/\.(spec|test)\.[cm]?[jt]s$/, '')
+    .replace(/\.[cm]?[jt]s$/, '')}.responses.json`;
 }
 
 async function writeOutputs(abs: string, result: { code: string; files: { name: string; content: string }[] }) {

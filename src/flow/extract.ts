@@ -155,7 +155,14 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
       case EventType.Custom: {
         const tag = String(ev.data?.tag ?? '');
         if (/error|bug|exception/i.test(tag)) {
-          signals.push({ t, kind: 'custom', message: `${tag}: ${stringify(ev.data?.payload)}`, trace: [], url: href, stepIndex: steps.length - 1 });
+          signals.push({
+            t,
+            kind: 'custom',
+            message: `${tag}: ${stringify(ev.data?.payload)}`,
+            trace: [],
+            url: href,
+            stepIndex: steps.length - 1,
+          });
         }
         break;
       }
@@ -292,7 +299,14 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     };
     network.push(call);
     if (status === 0 || status >= 500) {
-      signals.push({ t, kind: 'network-error', message: `${call.method} ${pathOfUrl(call.url)} → ${status || 'failed'}`, trace: [], url: href, stepIndex: steps.length - 1 });
+      signals.push({
+        t,
+        kind: 'network-error',
+        message: `${call.method} ${pathOfUrl(call.url)} → ${status || 'failed'}`,
+        trace: [],
+        url: href,
+        stepIndex: steps.length - 1,
+      });
     }
   }
 
@@ -359,7 +373,9 @@ export function extractFlow(session: Session, opts: ExtractOptions = {}): Flow {
     });
 
   if (!finalSignals.some((s) => s.kind !== 'console-warn' && s.kind !== 'network-error')) {
-    warnings.add('No error was captured in this recording. The generated test will replay the steps but needs an assertion that describes the bug.');
+    warnings.add(
+      'No error was captured in this recording. The generated test will replay the steps but needs an assertion that describes the bug.',
+    );
   }
 
   return {

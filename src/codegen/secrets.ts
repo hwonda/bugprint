@@ -7,7 +7,27 @@
  * `tokenizer` (a different word) are not.
  * Keep in sync with isSensitiveKey() in src/recorder/plugin.ts (tested).
  */
-const WORDS = new Set(['token', 'tokens', 'secret', 'secrets', 'password', 'passwd', 'pwd', 'jwt', 'credential', 'credentials', 'csrf', 'xsrf', 'sid', 'apikey', 'cookie', 'cookies', 'otp', 'pin', 'ssn']);
+const WORDS = new Set([
+  'token',
+  'tokens',
+  'secret',
+  'secrets',
+  'password',
+  'passwd',
+  'pwd',
+  'jwt',
+  'credential',
+  'credentials',
+  'csrf',
+  'xsrf',
+  'sid',
+  'apikey',
+  'cookie',
+  'cookies',
+  'otp',
+  'pin',
+  'ssn',
+]);
 const PAIRS = [
   ['api', 'key'],
   ['private', 'key'],

@@ -59,7 +59,13 @@ describe('network', () => {
   function recording() {
     const root = doc(h('button', { k: 'b' }, 'Load'));
     const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'b').id);
-    plugin(r, NET, { requests: [req({}), req({ name: '/logo.png', initiatorType: 'img' }), req({ name: 'https://cdn.other/x', responseBody: 'hi', responseHeaders: {} })] });
+    plugin(r, NET, {
+      requests: [
+        req({}),
+        req({ name: '/logo.png', initiatorType: 'img' }),
+        req({ name: 'https://cdn.other/x', responseBody: 'hi', responseHeaders: {} }),
+      ],
+    });
     plugin(r, NET, { requests: [req({ name: '/api/save', method: 'POST', status: 503, responseBody: null })] });
     return r;
   }
@@ -100,7 +106,10 @@ describe('network', () => {
 describe('clock and metadata', () => {
   it('installs the clock at the recording time and embeds the recorded errors', () => {
     const root = doc(h('button', { k: 'b' }, 'Pay'));
-    const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'b').id).error('Uncaught (in promise) TypeError: boom');
+    const r = new Rec()
+      .page('https://app.test/', root)
+      .click(byAttr(root, 'k', 'b').id)
+      .error('Uncaught (in promise) TypeError: boom');
     const flow = flowOf(r);
     const { code, testName } = generateTest(flow);
     expect(code).toContain(`await page.clock.install({ time: new Date('${new Date(flow.recordedAt).toISOString()}') });`);
@@ -110,7 +119,17 @@ describe('clock and metadata', () => {
   });
 
   it('maps a failing line back to its step', () => {
-    const src = ['test(x, async () => {', '  // s1 · open /', "  await page.goto('/');", '  // s2 · click button "Pay"', '  await x.click();', '', '  // Recorded in the session:', '  expect(1)', '});'].join('\n');
+    const src = [
+      'test(x, async () => {',
+      '  // s1 · open /',
+      "  await page.goto('/');",
+      '  // s2 · click button "Pay"',
+      '  await x.click();',
+      '',
+      '  // Recorded in the session:',
+      '  expect(1)',
+      '});',
+    ].join('\n');
     expect(stepAt(src, 5)).toEqual({ id: 's2', description: 'click button "Pay"', line: 5 });
     expect(stepAt(src, 3)?.id).toBe('s1');
     expect(stepAt(src, 8)).toBeUndefined(); // the final assertion is not a step

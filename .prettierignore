@@ -1,0 +1,8 @@
+dist
+node_modules
+fixtures
+test/.tmp
+tests/repro
+test-results
+.bugprint
+package-lock.json

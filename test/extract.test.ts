@@ -11,9 +11,13 @@ const flowOf = (r: Rec) => extractFlow(createSession(parseEvents(r.events), 'tes
 
 function loginPage() {
   return doc(
-    h('form', {},
-      h('label', { for: 'u' }, 'Username'), h('input', { id: 'u' }),
-      h('label', { for: 'p' }, 'Password'), h('input', { id: 'p', type: 'password' }),
+    h(
+      'form',
+      {},
+      h('label', { for: 'u' }, 'Username'),
+      h('input', { id: 'u' }),
+      h('label', { for: 'p' }, 'Password'),
+      h('input', { id: 'p', type: 'password' }),
       h('select', { 'aria-label': 'Plan', k: 'plan' }, h('option', { value: 'free' }, 'Free'), h('option', { value: 'pro' }, 'Pro')),
       h('label', {}, h('input', { type: 'checkbox', k: 'tos' }), 'Accept'),
       h('button', { type: 'submit' }, 'Sign in'),
@@ -97,7 +101,10 @@ describe('extractFlow', () => {
 
   it('honours step windows and include/exclude lists', () => {
     const root = doc(h('button', { k: 'a' }, 'A'), h('button', { k: 'b' }, 'B'));
-    const r = new Rec().page('https://app.test/', root).click(byAttr(root, 'k', 'a').id, 1000).click(byAttr(root, 'k', 'b').id, 1000);
+    const r = new Rec()
+      .page('https://app.test/', root)
+      .click(byAttr(root, 'k', 'a').id, 1000)
+      .click(byAttr(root, 'k', 'b').id, 1000);
     const session = createSession(parseEvents(r.events), 't');
     const windowed = extractFlow(session, { fromMs: 1900 });
     expect(windowed.steps.map((s) => s.kind)).toEqual(['goto', 'click']);
@@ -121,7 +128,10 @@ describe('redactValue', () => {
 
 describe('parseEvents', () => {
   it('accepts arrays, {events} and NDJSON, and rejects recordings without a snapshot', () => {
-    const e = [{ type: 2, timestamp: 2, data: { node: doc() } }, { type: 4, timestamp: 1, data: {} }];
+    const e = [
+      { type: 2, timestamp: 2, data: { node: doc() } },
+      { type: 4, timestamp: 1, data: {} },
+    ];
     expect(parseEvents(e).map((x) => x.timestamp)).toEqual([1, 2]);
     expect(parseEvents({ events: e })).toHaveLength(2);
     expect(parseEvents(e.map((x) => JSON.stringify(x)).join('\n'))).toHaveLength(2);

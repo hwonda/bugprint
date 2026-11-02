@@ -31,8 +31,7 @@ export interface Locator {
 // ---------------------------------------------------------------------------
 
 const ci = (s: string) => s.toLowerCase();
-const textMatch = (actual: string, expected: string, exact?: boolean) =>
-  exact ? actual === expected : ci(actual).includes(ci(expected));
+const textMatch = (actual: string, expected: string, exact?: boolean) => (exact ? actual === expected : ci(actual).includes(ci(expected)));
 
 function matches(dom: VirtualDom, n: VNode, q: Query): boolean {
   if (n.type !== NodeType.Element) return false;
@@ -63,8 +62,7 @@ function matches(dom: VirtualDom, n: VNode, q: Query): boolean {
       // getByText resolves to the innermost element that carries the text.
       for (const c of n.children) {
         const child = dom.get(c);
-        if (child?.type === NodeType.Element && !isHidden(dom, child) && textMatch(dom.textContent(child), q.text, q.exact))
-          return false;
+        if (child?.type === NodeType.Element && !isHidden(dom, child) && textMatch(dom.textContent(child), q.text, q.exact)) return false;
       }
       return true;
     }

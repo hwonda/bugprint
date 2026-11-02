@@ -101,7 +101,11 @@ async function main() {
   const session = await loadSessionFile(path.resolve(file));
   const num = (v?: string) => (v === undefined ? undefined : Number(v));
   const flow = extractFlow(session, { fromMs: num(values.from), toMs: num(values.to) });
-  const list = (v?: string) => v?.split(',').map((s) => s.trim()).filter(Boolean);
+  const list = (v?: string) =>
+    v
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
   if (cmd === 'summarize') return void process.stdout.write(`${summarizeFlow(flow)}\n`);
   if (cmd === 'minimize') {

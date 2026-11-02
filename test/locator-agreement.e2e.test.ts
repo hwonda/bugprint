@@ -49,19 +49,26 @@ async function recordClicks(page: Page, html: string) {
 
 describe('generated locators agree with the real test runner', () => {
   for (const [name, html] of Object.entries(PAGES)) {
-    it(name, async () => {
-      const page = await browser.newPage();
-      const { keys, events } = await recordClicks(page, html);
-      const flow = extractFlow(createSession(parseEvents(events), name));
-      const targets = flow.steps.filter((s) => 'target' in s && s.target).map((s) => (s as { target: { code: string } }).target.code);
-      expect(targets.length, `steps: ${flow.steps.map((s) => s.kind)}`).toBe(keys.length);
-      for (const [i, code] of targets.entries()) {
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
-        const locator = new Function('page', `return ${code};`)(page);
-        const matched: string[] = await locator.evaluateAll((els: HTMLElement[]) => els.map((e) => e.closest('[data-k]')?.getAttribute('data-k') ?? '?'));
-        expect(matched, `${keys[i]} → ${code}`).toEqual([keys[i]]);
-      }
-      await page.close();
-    }, 30_000);
+    it(
+      // oxlint-disable-next-line vitest/valid-title -- titles come from the PAGES table
+      name,
+      async () => {
+        const page = await browser.newPage();
+        const { keys, events } = await recordClicks(page, html);
+        const flow = extractFlow(createSession(parseEvents(events), name));
+        const targets = flow.steps.filter((s) => 'target' in s && s.target).map((s) => (s as { target: { code: string } }).target.code);
+        expect(targets.length, `steps: ${flow.steps.map((s) => s.kind)}`).toBe(keys.length);
+        for (const [i, code] of targets.entries()) {
+          // eslint-disable-next-line @typescript-eslint/no-implied-eval
+          const locator = new Function('page', `return ${code};`)(page);
+          const matched: string[] = await locator.evaluateAll((els: HTMLElement[]) =>
+            els.map((e) => e.closest('[data-k]')?.getAttribute('data-k') ?? '?'),
+          );
+          expect(matched, `${keys[i]} → ${code}`).toEqual([keys[i]]);
+        }
+        await page.close();
+      },
+      30_000,
+    );
   }
 });

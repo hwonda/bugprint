@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "import", "node", "vitest"],
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "env": { "node": true, "browser": true, "es2024": true },
+  "rules": {
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "typescript/no-explicit-any": "warn",
+    "eqeqeq": "error",
+    // vitest accepts a failure message as the 2nd argument of expect().
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }],
+    // __bugprintEvents / _meta are page and protocol globals, not style choices.
+    "no-underscore-dangle": "off",
+    // Small local helpers read better next to where they are used.
+    "unicorn/consistent-function-scoping": "off",
+    // Only ever applied to freshly built arrays here.
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-array-reverse": "off",
+    // The demo app imports from its own static server ('/vendor/...').
+    "import/no-absolute-path": "off"
+  },
+  "ignorePatterns": ["dist/**", "node_modules/**", "test/.tmp/**", "tests/repro/**", "test-results/**", ".bugprint/**", "fixtures/**"]
+}

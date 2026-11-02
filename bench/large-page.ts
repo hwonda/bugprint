@@ -20,9 +20,19 @@ function build(cards: number) {
   const items = Array.from({ length: cards }, (_, i) => {
     const btn = el('button', {}, 'Add to cart');
     buttons.push(btn.id);
-    return el('li', { class: 'card' }, el('h2', {}, `Product ${i}`), el('p', { class: 'price' }, `$${i}`), el('div', { class: 'actions' }, btn, el('a', { href: `/p/${i}` }, 'Details')));
+    return el(
+      'li',
+      { class: 'card' },
+      el('h2', {}, `Product ${i}`),
+      el('p', { class: 'price' }, `$${i}`),
+      el('div', { class: 'actions' }, btn, el('a', { href: `/p/${i}` }, 'Details')),
+    );
   });
-  const root: SerializedNode = { type: 0, id: id++, childNodes: [el('html', {}, el('head', {}), el('body', {}, el('main', {}, el('ul', {}, ...items))))] };
+  const root: SerializedNode = {
+    type: 0,
+    id: id++,
+    childNodes: [el('html', {}, el('head', {}), el('body', {}, el('main', {}, el('ul', {}, ...items))))],
+  };
   let t = 1_700_000_000_000;
   const events: unknown[] = [
     { type: 4, timestamp: t, data: { href: 'https://shop.test/' } },
@@ -52,6 +62,10 @@ for (const cards of process.argv.slice(2).map(Number).filter(Boolean).length ? p
     const shape = s.target.locator.nth !== undefined ? 'nth' : s.target.locator.chain.length > 1 ? 'scoped' : 'single';
     kinds.set(shape, (kinds.get(shape) ?? 0) + 1);
   }
-  const sample = flow.steps.find((s) => s.kind === 'click' && 'target' in s && /Product 1\b|Product 1'/.test(s.target.code)) ?? flow.steps.find((s) => s.kind === 'click');
-  console.log(`${String(cards).padStart(5)} cards · ${String(nodes).padStart(6)} nodes · 20 clicks → ${ms.toFixed(0).padStart(6)} ms (${(ms / 20).toFixed(1)} ms/click) · wrong=${wrong} · ${[...kinds].map(([k, v]) => `${k}=${v}`).join(' ')}\n        e.g. ${sample && 'target' in sample ? sample.target.code : ''}`);
+  const sample =
+    flow.steps.find((s) => s.kind === 'click' && 'target' in s && /Product 1\b|Product 1'/.test(s.target.code)) ??
+    flow.steps.find((s) => s.kind === 'click');
+  console.log(
+    `${String(cards).padStart(5)} cards · ${String(nodes).padStart(6)} nodes · 20 clicks → ${ms.toFixed(0).padStart(6)} ms (${(ms / 20).toFixed(1)} ms/click) · wrong=${wrong} · ${[...kinds].map(([k, v]) => `${k}=${v}`).join(' ')}\n        e.g. ${sample && 'target' in sample ? sample.target.code : ''}`,
+  );
 }

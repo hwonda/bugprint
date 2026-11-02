@@ -13,8 +13,14 @@ const root = path.join(here, 'app');
 const nm = path.join(here, '..', 'node_modules');
 const vendor = {
   '/vendor/rrweb.umd.min.cjs': path.join(nm, 'rrweb/dist/rrweb.umd.min.cjs'),
-  '/vendor/rrweb-plugin-console-record.umd.min.cjs': path.join(nm, '@rrweb/rrweb-plugin-console-record/dist/rrweb-plugin-console-record.umd.min.cjs'),
-  '/vendor/rrweb-plugin-network-record.umd.min.cjs': path.join(nm, '@rrweb/rrweb-plugin-network-record/dist/rrweb-plugin-network-record.umd.min.cjs'),
+  '/vendor/rrweb-plugin-console-record.umd.min.cjs': path.join(
+    nm,
+    '@rrweb/rrweb-plugin-console-record/dist/rrweb-plugin-console-record.umd.min.cjs',
+  ),
+  '/vendor/rrweb-plugin-network-record.umd.min.cjs': path.join(
+    nm,
+    '@rrweb/rrweb-plugin-network-record/dist/rrweb-plugin-network-record.umd.min.cjs',
+  ),
   '/vendor/bugprint-recorder.js': path.join(here, '..', 'dist/recorder/plugin.js'),
 };
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.cjs': 'text/javascript', '.css': 'text/css' };
@@ -31,9 +37,7 @@ function api(req, res, url) {
   if (coupon && req.method === 'GET') {
     const code = decodeURIComponent(coupon[1]).toUpperCase();
     if (code !== 'SAVE20') return send(404, { code, expired: false, discount: null });
-    return EXPIRED
-      ? send(200, { code, expired: true, discount: null })
-      : send(200, { code, expired: false, discount: { rate: 0.2 } });
+    return EXPIRED ? send(200, { code, expired: true, discount: null }) : send(200, { code, expired: false, discount: { rate: 0.2 } });
   }
   if (url === '/api/orders' && req.method === 'POST') return send(201, { id: 'ord_1042', status: 'placed' });
   return send(404, { error: 'not found' });

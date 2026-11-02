@@ -47,7 +47,13 @@ export interface VerifyResult {
   ok?: boolean;
 }
 
-const CONFIG_NAMES = ['playwright.config.ts', 'playwright.config.mts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs'];
+const CONFIG_NAMES = [
+  'playwright.config.ts',
+  'playwright.config.mts',
+  'playwright.config.js',
+  'playwright.config.mjs',
+  'playwright.config.cjs',
+];
 const WRAPPER_PREFIX = '.bugprint-run-';
 
 /** Nearest runner config at or above `from` (works in monorepos where tests live in a package). */
@@ -111,10 +117,12 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   const runDir = userConfig ? path.dirname(userConfig) : cwd;
   const cli = findRunnerCli(runDir) ?? findRunnerCli(dir);
   let command = '';
-  const all = (verdict: Verdict, summary: string, error?: string) =>
-    files.map((_, i) => makeResult(i, verdict, summary, error));
+  const all = (verdict: Verdict, summary: string, error?: string) => files.map((_, i) => makeResult(i, verdict, summary, error));
   if (!cli) {
-    return all('error', 'The test runner is not installed in this project. Run: npm i -D @playwright/test && npx playwright install chromium');
+    return all(
+      'error',
+      'The test runner is not installed in this project. Run: npm i -D @playwright/test && npx playwright install chromium',
+    );
   }
 
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'bugprint-run-'));
@@ -128,7 +136,17 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
   const wrapper = path.join(wrapperDir, `${WRAPPER_PREFIX}${process.pid}-${Date.now()}.config${ext}`);
   const releaseWrapper = trackPath(wrapper);
   const workers = opts.workers ?? (files.length > 1 ? 4 : 1);
-  await writeFile(wrapper, wrapperConfig(userConfig, dir, files.map((f) => path.basename(f)), opts.allProjects ?? false, workers), 'utf8');
+  await writeFile(
+    wrapper,
+    wrapperConfig(
+      userConfig,
+      dir,
+      files.map((f) => path.basename(f)),
+      opts.allProjects ?? false,
+      workers,
+    ),
+    'utf8',
+  );
 
   const args = ['test', '--config', wrapper, '--reporter', 'json'];
   command = `node ${path.relative(runDir, cli)} ${args.join(' ')}`;
@@ -201,22 +219,48 @@ export async function verifyTests(testPaths: string[], opts: BatchOptions = {}):
     const observed = observedErrors(tests, failed) ?? [stripCodeFrame(message)];
     const matched = recordedErrors.find((rec) => observed.some((o) => o.includes(core(rec))));
     if (matched) {
-      return makeResult(i, 'reproduced', `Reproduced: the test fails with the error recorded in the session ("${truncate(matched, 120)}").`, message, step, matched);
+      return makeResult(
+        i,
+        'reproduced',
+        `Reproduced: the test fails with the error recorded in the session ("${truncate(matched, 120)}").`,
+        message,
+        step,
+        matched,
+      );
     }
     if (!recordedErrors.length) {
-      return makeResult(i, 'failed', `The test failed${step ? ` at ${step.id} (${step.description})` : ''}. The recording had no error to compare with.`, message, step);
+      return makeResult(
+        i,
+        'failed',
+        `The test failed${step ? ` at ${step.id} (${step.description})` : ''}. The recording had no error to compare with.`,
+        message,
+        step,
+      );
     }
     const hint = /Timeout|waiting for|resolved to \d+ elements|strict mode violation/i.test(message)
       ? ' A locator did not match: the UI may differ from the recording, or an earlier step did not have its effect.'
       : '';
-    return makeResult(i, 'failed-differently', `The test failed${step ? ` at ${step.id} (${step.description})` : ''}, but not with the recorded error.${hint}`, message, step);
+    return makeResult(
+      i,
+      'failed-differently',
+      `The test failed${step ? ` at ${step.id} (${step.description})` : ''}, but not with the recorded error.${hint}`,
+      message,
+      step,
+    );
   }
 
   function recordedFor(i: number): string[] {
     return opts.expectedErrors ?? parseMeta(sources[i]!)?.errors ?? [];
   }
 
-  function makeResult(i: number, verdict: Verdict, summary: string, error?: string, failedStep?: VerifyResult['failedStep'], matchedError?: string): VerifyResult {
+  function makeResult(
+    i: number,
+    verdict: Verdict,
+    summary: string,
+    error?: string,
+    failedStep?: VerifyResult['failedStep'],
+    matchedError?: string,
+  ): VerifyResult {
     return {
       verdict,
       summary,
@@ -274,10 +318,19 @@ export function stepAt(source: string, line: number): VerifyResult['failedStep']
 
 /** "Uncaught TypeError: x is undefined" → "x is undefined" (how page errors are reported on replay). */
 function core(message: string): string {
-  return message.replace(/^Uncaught\s+(\(in promise\)\s+)?/, '').replace(/^[A-Z]\w*(Error|Exception):\s*/, '').trim();
+  return message
+    .replace(/^Uncaught\s+(\(in promise\)\s+)?/, '')
+    .replace(/^[A-Z]\w*(Error|Exception):\s*/, '')
+    .trim();
 }
 
-function wrapperConfig(userConfig: string | undefined, testDir: string, testFiles: string[], allProjects: boolean, workers: number): string {
+function wrapperConfig(
+  userConfig: string | undefined,
+  testDir: string,
+  testFiles: string[],
+  allProjects: boolean,
+  workers: number,
+): string {
   const head = userConfig
     ? `import base from ${JSON.stringify(`./${path.basename(userConfig).replace(/\.(ts|mts)$/, '')}`)};\nconst b = base.default ?? base;\n`
     : 'const b = {};\n';

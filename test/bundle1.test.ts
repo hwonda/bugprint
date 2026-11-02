@@ -15,7 +15,22 @@ import { byAttr, doc, h, plugin, Rec, resetIds } from './helpers.js';
 beforeEach(resetIds);
 const flowOf = (r: Rec) => extractFlow(createSession(parseEvents(r.events), 'test'));
 
-const SENSITIVE = ['accessToken', 'refresh_token', 'X-Api-Key', 'apiKey', 'sessionId', 'session_id', 'auth', 'Authorization', 'password', 'client_secret', 'csrfToken', 'jwt', 'privateKey', 'OTP'];
+const SENSITIVE = [
+  'accessToken',
+  'refresh_token',
+  'X-Api-Key',
+  'apiKey',
+  'sessionId',
+  'session_id',
+  'auth',
+  'Authorization',
+  'password',
+  'client_secret',
+  'csrfToken',
+  'jwt',
+  'privateKey',
+  'OTP',
+];
 const SAFE = ['author', 'authors', 'tokenizer', 'cart', 'theme', 'sessions_count_label', 'keyboard', 'pinned', 'title', 'email'];
 
 describe('secret detection', () => {
@@ -39,9 +54,17 @@ describe('secret detection', () => {
   });
 
   it('redacts JSON values under sensitive keys (whole subtree), keeping numbers and other fields', () => {
-    const body = JSON.stringify({ user: { id: 7, name: 'Jane', accessToken: 'abc123' }, auth: { refresh: 'r-1', expiresIn: 3600 }, author: 'Kim' });
+    const body = JSON.stringify({
+      user: { id: 7, name: 'Jane', accessToken: 'abc123' },
+      auth: { refresh: 'r-1', expiresIn: 3600 },
+      author: 'Kim',
+    });
     const r = redactSecrets(body, 'application/json');
-    expect(JSON.parse(r.value)).toEqual({ user: { id: 7, name: 'Jane', accessToken: 'redacted' }, auth: { refresh: 'redacted', expiresIn: 3600 }, author: 'Kim' });
+    expect(JSON.parse(r.value)).toEqual({
+      user: { id: 7, name: 'Jane', accessToken: 'redacted' },
+      auth: { refresh: 'redacted', expiresIn: 3600 },
+      author: 'Kim',
+    });
     expect(r.count).toBe(2);
     expect(redactSecrets('{"a":1}', 'application/json')).toEqual({ value: '{"a":1}', count: 0 }); // untouched bodies keep their formatting
   });
@@ -51,10 +74,25 @@ describe('secrets in generated tests', () => {
   function recording() {
     const root = doc(h('button', { k: 'b' }, 'Login'));
     const r = new Rec().page('https://app.test/', root);
-    plugin(r, 'bugprint/interaction@1', { type: 'storage', origin: 'https://app.test', localStorage: { cart: '["kb"]', authToken: 'eyJ.x.y', lastSessionId: 's-9' }, cookies: { theme: 'dark' }, masked: [] });
+    plugin(r, 'bugprint/interaction@1', {
+      type: 'storage',
+      origin: 'https://app.test',
+      localStorage: { cart: '["kb"]', authToken: 'eyJ.x.y', lastSessionId: 's-9' },
+      cookies: { theme: 'dark' },
+      masked: [],
+    });
     r.click(byAttr(root, 'k', 'b').id);
     plugin(r, 'rrweb/network@1', {
-      requests: [{ name: 'https://app.test/api/login', method: 'POST', initiatorType: 'fetch', status: 200, responseHeaders: { 'content-type': 'application/json' }, responseBody: { accessToken: 'tok-123', user: { id: 1 } } }],
+      requests: [
+        {
+          name: 'https://app.test/api/login',
+          method: 'POST',
+          initiatorType: 'fetch',
+          status: 200,
+          responseHeaders: { 'content-type': 'application/json' },
+          responseBody: { accessToken: 'tok-123', user: { id: 1 } },
+        },
+      ],
     });
     return flowOf(r);
   }
@@ -114,10 +152,14 @@ describe('temp file cleanup', () => {
     expect([existsSync(dead), existsSync(alive), existsSync(other)]).toEqual([false, true, true]);
   });
 
-  it('tracked files are removed when the process is interrupted', async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'bp-sig-'));
-    const file = path.join(dir, 'wrapper.config.ts');
-    const script = `
+  // Windows has no POSIX signals: kill() terminates without running handlers. Leftovers there
+  // are removed by sweepStale() on the next run (tested above).
+  it.skipIf(process.platform === 'win32')(
+    'tracked files are removed when the process is interrupted',
+    async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'bp-sig-'));
+      const file = path.join(dir, 'wrapper.config.ts');
+      const script = `
       import { writeFileSync } from 'node:fs';
       import { trackPath } from ${JSON.stringify(path.resolve(__dirname, '../src/util/cleanup.ts'))};
       writeFileSync(${JSON.stringify(file)}, 'x');
@@ -125,12 +167,17 @@ describe('temp file cleanup', () => {
       console.log('ready');
       setInterval(() => {}, 1000);
     `;
-    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: path.resolve(__dirname, '..'), stdio: ['ignore', 'pipe', 'inherit'] });
-    await new Promise<void>((resolve) => child.stdout!.on('data', (d) => String(d).includes('ready') && resolve()));
-    expect(existsSync(file)).toBe(true);
-    const exited = new Promise((resolve) => child.on('exit', resolve));
-    child.kill('SIGTERM');
-    await exited;
-    expect(existsSync(file)).toBe(false);
-  }, 20_000);
+      const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        cwd: path.resolve(__dirname, '..'),
+        stdio: ['ignore', 'pipe', 'inherit'],
+      });
+      await new Promise<void>((resolve) => child.stdout!.on('data', (d) => String(d).includes('ready') && resolve()));
+      expect(existsSync(file)).toBe(true);
+      const exited = new Promise((resolve) => child.on('exit', resolve));
+      child.kill('SIGTERM');
+      await exited;
+      expect(existsSync(file)).toBe(false);
+    },
+    20_000,
+  );
 });

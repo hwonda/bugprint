@@ -1,35 +1,38 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Checkout · Bugprint Demo Shop</title>
-  <link rel="stylesheet" href="/style.css" />
-  <script src="/vendor/rrweb.umd.min.cjs"></script>
-  <script src="/vendor/rrweb-plugin-console-record.umd.min.cjs"></script>
-  <script src="/vendor/rrweb-plugin-network-record.umd.min.cjs"></script>
-  <script type="module" src="/recorder.js"></script>
-</head>
-<body>
-  <header><h1>Checkout</h1><span id="cart-count" aria-live="polite">Cart: 0</span></header>
-  <main>
-    <form id="checkout" novalidate>
-      <label for="email">Email</label>
-      <input id="email" name="email" type="email" autocomplete="off" />
+  <head>
+    <meta charset="utf-8" />
+    <title>Checkout · Bugprint Demo Shop</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/vendor/rrweb.umd.min.cjs"></script>
+    <script src="/vendor/rrweb-plugin-console-record.umd.min.cjs"></script>
+    <script src="/vendor/rrweb-plugin-network-record.umd.min.cjs"></script>
+    <script type="module" src="/recorder.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Checkout</h1>
+      <span id="cart-count" aria-live="polite">Cart: 0</span>
+    </header>
+    <main>
+      <form id="checkout" novalidate>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="off" />
 
-      <label for="coupon">Coupon code</label>
-      <div class="row">
-        <input id="coupon" name="coupon" placeholder="e.g. SAVE20" autocomplete="off" />
-        <button type="button" id="apply-coupon">Apply</button>
-      </div>
-      <p id="coupon-status" role="status"></p>
+        <label for="coupon">Coupon code</label>
+        <div class="row">
+          <input id="coupon" name="coupon" placeholder="e.g. SAVE20" autocomplete="off" />
+          <button type="button" id="apply-coupon">Apply</button>
+        </div>
+        <p id="coupon-status" role="status"></p>
 
-      <label><input type="checkbox" name="terms" /> I agree to the terms</label>
+        <label><input type="checkbox" name="terms" /> I agree to the terms</label>
 
-      <p>Total: <strong id="total">$0</strong></p>
-      <button type="submit" data-testid="place-order">Place order</button>
-    </form>
-    <div id="result" role="alert"></div>
-  </main>
-  <script src="/app.js"></script>
-</body>
+        <p>Total: <strong id="total">$0</strong></p>
+        <button type="submit" data-testid="place-order">Place order</button>
+      </form>
+      <div id="result" role="alert"></div>
+    </main>
+    <script src="/app.js"></script>
+  </body>
 </html>

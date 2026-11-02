@@ -85,7 +85,8 @@ export function selectSteps(flow: Flow, opts: Pick<GenerateOptions, 'startFrom' 
     const idx = all.findIndex((s) => s.id === opts.startFrom);
     if (idx === -1) throw new Error(`Unknown step "${opts.startFrom}".`);
     const s0 = all[idx]!;
-    if (!NAV_KINDS.has(s0.kind)) throw new Error(`startFrom must be a navigation step (goto/expectUrl/reload/back/forward); ${s0.id} is a ${s0.kind}.`);
+    if (!NAV_KINDS.has(s0.kind))
+      throw new Error(`startFrom must be a navigation step (goto/expectUrl/reload/back/forward); ${s0.id} is a ${s0.kind}.`);
     start = { id: s0.id, t: s0.t, url: s0.url, kind: 'goto' };
     all = all.slice(idx + 1);
   }
@@ -122,7 +123,11 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
 
   const recordedOrigin = originOf(flow.startUrl);
   const baseUrl = (opts.baseUrl ?? recordedOrigin ?? '').replace(/\/$/, '');
-  const testName = opts.testName ?? (errors[0] ? `repro: ${truncate(errors[0].message.replace(/^Uncaught\s+(\(in promise\)\s+)?/, ''), 90)}` : `repro: session ${flow.sessionId}`);
+  const testName =
+    opts.testName ??
+    (errors[0]
+      ? `repro: ${truncate(errors[0].message.replace(/^Uncaught\s+(\(in promise\)\s+)?/, ''), 90)}`
+      : `repro: session ${flow.sessionId}`);
   const firstT = steps[0]!.t;
 
   // ---- network ---------------------------------------------------------------
@@ -149,22 +154,29 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
         body: ((b) => (redact ? redactBody(b, c.contentType) : b))(scrub(c.responseBody, c.contentType)),
       });
     }
-    if (noBody) notes.push(`${noBody} recorded API call(s) have no response body (enable recordBody in the network plugin); they go to the live backend.`);
+    if (noBody)
+      notes.push(
+        `${noBody} recorded API call(s) have no response body (enable recordBody in the network plugin); they go to the live backend.`,
+      );
     if (tooBig) notes.push(`${tooBig} response(s) were too large to include; they go to the live backend.`);
   }
   const responsesJson = JSON.stringify(responses);
   const external = Boolean(opts.fixturesFile) && responses.length > 0 && responsesJson.length > (opts.inlineLimit ?? 64 * 1024);
   if (external) files.push({ name: opts.fixturesFile!, content: `${JSON.stringify(responses, null, 1)}\n` });
-  else if (responsesJson.length > (opts.inlineLimit ?? 64 * 1024)) notes.push('Recorded responses are large; pass an outputPath so they can be stored in a separate fixtures file.');
+  else if (responsesJson.length > (opts.inlineLimit ?? 64 * 1024))
+    notes.push('Recorded responses are large; pass an outputPath so they can be stored in a separate fixtures file.');
 
   // ---- storage ---------------------------------------------------------------
   const storage = flow.initialStorage;
-  const restore = (opts.restoreStorage ?? true) && storage && (Object.keys(storage.localStorage).length || Object.keys(storage.cookies).length);
+  const restore =
+    (opts.restoreStorage ?? true) && storage && (Object.keys(storage.localStorage).length || Object.keys(storage.cookies).length);
   if (opts.storageState && storage && Object.keys(storage.cookies).length) {
     notes.push('Recorded cookies are not applied because a storageState file was given; it provides the cookies.');
   }
   if (storage?.masked.length) {
-    notes.push(`The recorder left out sensitive storage entries (${storage.masked.join(', ')}). If the bug needs a logged-in user, provide storageState yourself.`);
+    notes.push(
+      `The recorder left out sensitive storage entries (${storage.masked.join(', ')}). If the bug needs a logged-in user, provide storageState yourself.`,
+    );
   }
   if (restore && storage && originOf(storage.origin) !== recordedOrigin) {
     notes.push(`Initial storage was captured on ${storage.origin}, not on the start page origin; it was not restored.`);
@@ -179,8 +191,12 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     const cleaned = scrub(v, null);
     return redact ? redactBody(cleaned, 'application/json') : cleaned;
   };
-  const lsEntries = restorable ? Object.entries(storage!.localStorage).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v))) : [];
-  const cookieEntries = restorable ? Object.entries(storage!.cookies).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v))) : [];
+  const lsEntries = restorable
+    ? Object.entries(storage!.localStorage).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v)))
+    : [];
+  const cookieEntries = restorable
+    ? Object.entries(storage!.cookies).flatMap(([k, v]) => ((x) => (x === null ? [] : [[k, x] as const]))(val(k, v)))
+    : [];
   if (opts.storageState) {
     storageLines.push(
       '// Storage state supplied by you (e.g. a logged-in user); BUGPRINT_STORAGE_STATE overrides it.',
@@ -190,7 +206,8 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   } else if (lsEntries.length || cookieEntries.length) {
     const ls = lsEntries.map(([name, value]) => `{ name: ${str(name)}, value: ${str(value)} }`);
     const cookies = cookieEntries.map(
-      ([name, value]) => `{ name: ${str(name)}, value: ${str(value)}, domain: new URL(BASE_URL).hostname, path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' as const }`,
+      ([name, value]) =>
+        `{ name: ${str(name)}, value: ${str(value)}, domain: new URL(BASE_URL).hostname, path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' as const }`,
     );
     storageLines.push(
       '// Browser storage when the recording started. Sensitive keys were never recorded.',
@@ -216,7 +233,9 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   }
 
   if (!flow.capabilities.network) {
-    notes.push('The recording has no network data, so the test runs against your live backend. Bugs that depend on API data may not reproduce. Record with the rrweb network plugin (recordBody: true) to capture responses.');
+    notes.push(
+      'The recording has no network data, so the test runs against your live backend. Bugs that depend on API data may not reproduce. Record with the rrweb network plugin (recordBody: true) to capture responses.',
+    );
   }
   if (!flow.capabilities.console) {
     notes.push('The recording has no console data, so errors could not be captured. Add the rrweb console plugin to the recorder.');
@@ -226,7 +245,10 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
   const secrets: string[] = [];
   const body: string[] = [];
   body.push(...seedLines);
-  if (freezeTime) body.push(`  await page.clock.install({ time: new Date(${str(new Date(flow.recordedAt).toISOString())}) }); // when the session was recorded`);
+  if (freezeTime)
+    body.push(
+      `  await page.clock.install({ time: new Date(${str(new Date(flow.recordedAt).toISOString())}) }); // when the session was recorded`,
+    );
   if (external) {
     body.push(
       `  const RECORDED_RESPONSES: RecordedResponse[] = JSON.parse(readFileSync(path.join(path.dirname(test.info().file), ${str(opts.fixturesFile!)}), 'utf8'));`,
@@ -269,7 +291,10 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
     tail.push("  // await expect(page.getByRole('alert')).toHaveText('Order placed');");
   }
 
-  if (secretsRedacted) notes.push(`${secretsRedacted} secret value(s) (tokens, API keys, sensitive storage keys) were replaced or left out. Pass keepSecrets to keep them.`);
+  if (secretsRedacted)
+    notes.push(
+      `${secretsRedacted} secret value(s) (tokens, API keys, sensitive storage keys) were replaced or left out. Pass keepSecrets to keep them.`,
+    );
 
   // ---- assemble ------------------------------------------------------------------
   const meta: TestMeta = { v: 1, session: flow.sessionId, errors: relevant.map((e) => e.message) };
@@ -301,7 +326,7 @@ export function generateTest(flow: Flow, opts: GenerateOptions = {}): GeneratedT
       '  const errors: string[] = [];',
       "  page.on('pageerror', (err) => errors.push(err.message));",
       "  page.on('console', (msg) => {",
-      "    // The browser logs every failed request as an error; network failures are not page errors.",
+      '    // The browser logs every failed request as an error; network failures are not page errors.',
       "    if (msg.type() === 'error' && !msg.text().startsWith('Failed to load resource')) errors.push(msg.text());",
       '  });',
       '',
