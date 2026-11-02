@@ -1,5 +1,7 @@
 # bugprint
 
+[![CI](https://github.com/hwonda/bugprint/actions/workflows/ci.yml/badge.svg)](https://github.com/hwonda/bugprint/actions/workflows/ci.yml)
+
 [English](README.md) · **한국어**
 
 **사용자 세션 녹화를, 그 버그를 재현하며 실패하는 테스트로 바꿉니다.**

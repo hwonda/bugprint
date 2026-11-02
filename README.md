@@ -1,5 +1,7 @@
 # bugprint
 
+[![CI](https://github.com/hwonda/bugprint/actions/workflows/ci.yml/badge.svg)](https://github.com/hwonda/bugprint/actions/workflows/ci.yml)
+
 **English** · [한국어](README.ko.md)
 
 **Turn a recorded user session into a failing test that reproduces the bug.**

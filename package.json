@@ -51,6 +51,13 @@
     "ai-agents"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hwonda/bugprint.git"
+  },
+  "homepage": "https://github.com/hwonda/bugprint#readme",
+  "bugs": "https://github.com/hwonda/bugprint/issues",
+  "mcpName": "io.github.hwonda/bugprint",
   "engines": {
     "node": ">=20"
   },
